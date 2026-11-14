@@ -1,3 +1,5 @@
+/* Whiteboard. Lives inside the workspace shell and uses its tokens
+   (--alpha-accent, --line, --dim, --surface) plus the site theme tokens. */
 .whiteboard {
   position: relative;
   width: 100%;
@@ -7,27 +9,229 @@
   background: var(--background);
   isolation: isolate;
 }
+.surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+}
+.connectTarget {
+  fill: color-mix(in srgb, var(--alpha-accent) 8%, transparent);
+  stroke: var(--alpha-accent);
+  pointer-events: none;
+}
+
+/* ---- Floating panels ---- */
+.hud {
+  position: absolute;
+  z-index: 1;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 20px #00000026;
+}
+.whiteboard .hud button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.whiteboard .hud button:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.whiteboard .hud button[aria-pressed="true"],
+.whiteboard .hud button[aria-expanded="true"] {
+  background: var(--accent);
+  color: var(--alpha-accent);
+  border-color: var(--border);
+}
+.tools {
+  left: 16px;
+  top: 16px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+}
+.whiteboard .tools button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+}
+.toolDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 4px;
+}
+.toolCaption {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--muted-foreground);
+  padding: 2px 10px 4px;
+}
+.pen {
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
+}
+.whiteboard .penAction {
+  padding: 4px 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.penDivider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+}
+.widths {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.whiteboard .widths button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.widths button span {
+  display: block;
+  border-radius: 50%;
+}
+.zoom {
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+}
+.whiteboard .zoom button {
+  padding: 5px 10px;
+  font-size: 11px;
+  min-width: 30px;
+}
+.notes {
+  top: 64px;
+  right: 16px;
+  width: min(310px, calc(100% - 150px));
+  padding: 14px;
+  max-height: calc(100% - 130px);
+  overflow: auto;
+}
+.notes > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.whiteboard .notes > div button {
+  padding: 4px;
+  display: grid;
+}
+.notes textarea {
+  min-height: 130px;
+  font-size: 12px;
+}
+.whiteboard .notes > button {
+  border-color: var(--border);
+  font-size: 11px;
+}
+.hint {
+  position: absolute;
+  left: 18px;
+  bottom: 20px;
+  right: 190px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Color swatches (pen palette, sticky colors) ---- */
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.whiteboard .swatches button[style] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--foreground) 25%, transparent);
+  background: var(--swatch);
+  opacity: 1;
+}
+.whiteboard .swatches button[style]:hover {
+  background: var(--swatch);
+  transform: scale(1.15);
+}
+.whiteboard .swatches button[style][aria-pressed="true"] {
+  background: var(--swatch);
+  border-color: var(--foreground);
+  box-shadow:
+    0 0 0 2px var(--popover),
+    0 0 0 3px var(--foreground);
+}
+.whiteboard .swatches input[type="color"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  flex-shrink: 0;
+}
+.swatches input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.swatches input::-webkit-color-swatch {
+  border: 1px dashed color-mix(in srgb, var(--foreground) 45%, transparent);
+  border-radius: 50%;
+}
+.swatches input::-moz-color-swatch {
+  border: 1px dashed color-mix(in srgb, var(--foreground) 45%, transparent);
+  border-radius: 50%;
+}
+
+/* ---- Items ---- */
 .object {
   height: 100%;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--card);
   color: var(--foreground);
   position: relative;
-  box-shadow: 0 4px 12px #00000016;
+  box-shadow: 0 4px 12px #00000020;
   overflow: hidden;
-  padding-bottom: 24px;
 }
-.object.sticky {
-  background: color-mix(in srgb, var(--card) 88%, #e4b93d);
-  border: none;
-  box-shadow: 0 3px 8px #00000012;
-}
-.sticky .objectHeader {
-  background: transparent;
-  border-bottom: 0;
-  padding: 4px 8px 0;
+.objectHeader {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  background: color-mix(in srgb, var(--muted) 55%, var(--card));
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 .whiteboard .objectHeader button {
   display: flex;
@@ -35,107 +239,27 @@
   gap: 8px;
   border: 0;
   background: transparent;
-  padding: 6px;
+  padding: 5px;
   color: var(--muted-foreground);
 }
-.sticky .objectHeader button:not(.moveObject),
-.sticky .resizeObject {
-  opacity: 0;
-}
-.sticky:hover .objectHeader button,
-.sticky:focus-within .objectHeader button,
-.sticky:hover .resizeObject,
-.sticky:focus-within .resizeObject {
-  opacity: 1;
-}
-.whiteboard .objectHeader button:hover {
+.whiteboard .objectHeader button:hover:not(:disabled) {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-}
-.whiteboard .resizeObject:disabled {
-  visibility: hidden;
-}
-.whiteboard .moveObject:disabled {
-  cursor: default;
-  opacity: 1;
-}
-.sticky textarea {
-  padding-top: 4px !important;
-  font-size: 16px;
-  line-height: 1.7;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 .whiteboard .objectHeader button[aria-pressed="true"] {
-  color: var(--foreground);
+  color: var(--alpha-accent);
 }
-.whiteboard .tools {
-  padding: 7px;
-  gap: 3px;
-  border-radius: 10px;
-  max-height: calc(100% - 140px);
-  overflow-y: auto;
-  box-shadow: 0 6px 24px #00000018;
-}
-.whiteboard .tools button {
-  border: 0;
-  background: transparent;
-  padding: 9px 10px;
-  border-radius: 6px;
-  gap: 11px;
-  color: var(--muted-foreground);
-}
-.whiteboard .tools button:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-.whiteboard .tools button[aria-pressed="true"] {
-  background: var(--primary);
-  color: var(--primary-foreground);
-}
-.toolDivider {
-  height: 1px;
-  background: var(--border);
-  margin: 6px 3px;
-}
-.toolCaption {
-  font-size: 8px;
-  letter-spacing: 1.5px;
-  color: var(--muted-foreground);
-  padding: 4px 10px;
-}
-.whiteboard .ink input {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-.ink input::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-.ink input::-webkit-color-swatch {
-  border: 1px solid var(--border);
-  border-radius: 50%;
-}
-.ink input::-moz-color-swatch {
-  border: 1px solid var(--border);
-  border-radius: 50%;
-}
-.objectHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  padding: 4px;
-  background: var(--muted);
-  border-bottom: 1px solid var(--border);
-}
-.objectHeader .moveObject {
+.whiteboard .objectHeader .moveObject {
   touch-action: none;
   cursor: move;
   flex: 1;
+  min-width: 0;
   text-align: left;
-  text-transform: capitalize;
   font-size: 11px;
+}
+.whiteboard .objectHeader .moveObject:disabled {
+  cursor: default;
+  opacity: 1;
 }
 .object textarea {
   flex: 1;
@@ -144,16 +268,182 @@
   margin: 0 !important;
   resize: none !important;
   border: 0 !important;
+  border-radius: 0 !important;
   background: transparent !important;
-  padding: 16px !important;
+  padding: 14px 16px !important;
+  outline: none !important;
 }
-.object .resizeObject {
+.whiteboard .object .resizeObject {
   position: absolute;
   right: 0;
   bottom: 0;
   touch-action: none;
   cursor: nwse-resize;
-  padding: 0 7px;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  display: grid;
+  opacity: 0.6;
+}
+.whiteboard .object .resizeObject:hover {
+  opacity: 1;
+  background: transparent;
+}
+.whiteboard .resizeObject:disabled {
+  visibility: hidden;
+}
+.struck {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Sticky note: tinted paper; controls appear on hover or focus. */
+.object.sticky {
+  --sticky: #e4b93d;
+  background: color-mix(in srgb, var(--card) 72%, var(--sticky));
+  border-color: color-mix(in srgb, var(--sticky) 45%, transparent);
+  box-shadow: 0 3px 10px #0000001f;
+}
+.sticky .objectHeader,
+.text .objectHeader {
+  background: transparent;
+  border-bottom: 0;
+  padding: 4px 6px 0;
+  gap: 4px;
+}
+.sticky .objectHeader > :not(.moveObject),
+.sticky .resizeObject,
+.text .objectHeader,
+.text .resizeObject {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sticky:hover .objectHeader > *,
+.sticky:focus-within .objectHeader > *,
+.whiteboard .sticky:hover .resizeObject,
+.whiteboard .sticky:focus-within .resizeObject,
+.text:hover .objectHeader,
+.text:focus-within .objectHeader,
+.whiteboard .text:hover .resizeObject,
+.whiteboard .text:focus-within .resizeObject {
+  opacity: 1;
+}
+.sticky textarea {
+  padding-top: 6px !important;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* Free text: no card, just type on the canvas. */
+.object.text {
+  background: transparent;
+  border: 1px dashed transparent;
+  box-shadow: none;
+}
+.object.text:hover,
+.object.text:focus-within {
+  border-color: var(--border);
+}
+.text .objectHeader {
+  background: var(--popover);
+  border-bottom: 1px solid var(--border);
+  padding: 2px 4px;
+}
+.text textarea {
+  padding: 6px 8px !important;
+  line-height: 1.35;
+}
+.whiteboard .swatches select {
+  padding: 2px 4px;
+  font-size: 10px;
+}
+
+/* Ticket link node */
+.object.link {
+  border-color: color-mix(in srgb, var(--alpha-accent) 45%, var(--border));
+}
+.whiteboard .link .moveObject {
+  flex: 0 0 auto;
+}
+.whiteboard .linkPicker {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+.whiteboard .linkOpen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px 12px;
+  color: var(--muted-foreground);
+}
+.whiteboard .linkOpen:hover {
+  background: var(--accent);
+  color: var(--alpha-accent);
+}
+.linkState {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--muted-foreground);
+  border-radius: 50%;
+  font-size: 9px;
+  line-height: 1;
+}
+.linkDone {
+  background: var(--alpha-accent);
+  border-color: var(--alpha-accent);
+  color: var(--background);
+}
+.linkText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.linkText strong {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.linkText small {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.linkEmpty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+/* Arrow: end handles only show while the arrow itself is hovered or focused,
+   so nothing is drawn on the items it connects. */
+.arrowHandle {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.arrowObject:hover .arrowHandle,
+.arrowObject:focus-within .arrowHandle,
+.arrowHandle:active {
+  opacity: 1;
 }
 .arrowLabel {
   display: flex;
@@ -182,11 +472,15 @@
   border: 0;
   padding: 4px;
   opacity: 0;
+  display: grid;
+  color: var(--muted-foreground);
 }
 .arrowObject:hover .arrowDelete,
 .arrowObject:focus-within .arrowDelete {
   opacity: 1;
 }
+
+/* Kanban on the canvas */
 .miniBoard {
   display: flex;
   gap: 10px;
@@ -198,17 +492,21 @@
 .miniBoard > section {
   min-width: 190px;
   width: 190px;
-  background: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   padding: 8px;
   overflow: auto;
 }
 .miniBoard h3 {
-  font-size: 12px;
-  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 2px 2px 10px;
 }
 .miniTask {
   background: var(--card);
   border: 1px solid var(--border);
+  border-radius: var(--radius);
   padding: 8px;
   margin-bottom: 8px;
   font-size: 11px;
@@ -219,122 +517,250 @@
   align-items: flex-start;
   overflow-wrap: anywhere;
 }
-.miniTask select {
-  width: 100%;
-  margin-top: 8px;
-  font-size: 10px !important;
-}
-.miniBoard form input {
-  width: 100%;
-  font-size: 11px !important;
-}
-.miniBoard form button {
-  margin-top: 6px;
-}
-.surface {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  background-image: radial-gradient(var(--border) 1px, transparent 1px);
-}
-.hud {
-  position: absolute;
-  z-index: 1;
-  background: var(--popover);
-  color: var(--popover-foreground);
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 20px #00000015;
-}
-.title {
-  left: 18px;
-  top: 18px;
-  padding: 10px 15px;
-  display: flex;
-  gap: 16px;
-  align-items: center;
-}
-.title strong {
-  font-size: 12px;
-  font-weight: 500;
-}
-.title span {
-  font-size: 10px;
-  color: var(--muted-foreground);
-}
-.tools {
-  left: 18px;
-  top: 50%;
-  transform: translateY(-50%);
-  padding: 5px;
-  display: grid;
-  gap: 5px;
-}
-.tools button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-start;
-  font-size: 13px;
-}
-.tools button span {
-  font-size: 10px;
-}
-.ink {
-  display: flex;
-  justify-content: center;
-  padding: 6px;
-}
-.zoom {
-  right: 18px;
-  bottom: 18px;
+.miniTask > div {
   display: flex;
   gap: 4px;
-  padding: 5px;
+  margin-top: 8px;
 }
-.notes {
-  top: 72px;
-  right: 18px;
-  width: min(310px, calc(100% - 125px));
-  padding: 14px;
-  max-height: calc(100% - 145px);
-  overflow: auto;
-}
-.notes > div {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-}
-.notes textarea {
-  min-height: 130px;
-  font-size: 12px;
-}
-.hint {
-  position: absolute;
-  left: 18px;
-  bottom: 22px;
+.whiteboard .miniTask select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
   font-size: 10px;
+}
+.whiteboard .miniTask button {
+  padding: 3px 6px;
+  display: grid;
+  place-items: center;
+}
+.whiteboard .miniBoard form {
+  display: flex;
+  gap: 4px;
+}
+.whiteboard .miniBoard form input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.whiteboard .miniBoard form button {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+/* ---- Document ---- */
+.documentEditor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.formatbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  flex-shrink: 0;
+}
+.formatGroup {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+.whiteboard .formatbar select {
+  padding: 3px 4px;
+  font-size: 10px;
+  max-width: 108px;
+}
+.whiteboard .formatbar button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1;
+}
+.whiteboard .formatbar button:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.whiteboard .formatbar button[aria-pressed="true"],
+.whiteboard .formatbar button[aria-expanded="true"] {
+  background: var(--accent);
+  color: var(--alpha-accent);
+  border-color: var(--border);
+}
+.formatbar button[data-command="bold"] {
+  font-weight: 700;
+}
+.formatbar button[data-command="italic"] {
+  font-style: italic;
+}
+.formatbar button[data-command="underline"] {
+  text-decoration: underline;
+}
+.formatbar button[data-command="strikeThrough"] {
+  text-decoration: line-through;
+}
+.formatColor {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.whiteboard .formatColor input[type="color"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.linkForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.whiteboard .linkForm input {
+  flex: 1;
+  min-width: 120px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.whiteboard .linkForm input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+.whiteboard .linkForm button {
+  padding: 4px 9px;
+  font-size: 10px;
+}
+.linkForm span {
+  flex-basis: 100%;
+  font-size: 10px;
+  color: var(--destructive);
+}
+.documentPage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  outline: none;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.documentPage:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--alpha-accent);
+}
+.documentPage[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  position: absolute;
   color: var(--muted-foreground);
   pointer-events: none;
 }
-@container (max-width: 600px) {
+.documentPage :is(h1, h2, h3) {
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  line-height: 1.3;
+  margin: 0.8em 0 0.35em;
+}
+.documentPage h1 {
+  font-size: 22px;
+}
+.documentPage h2 {
+  font-size: 17px;
+}
+.documentPage h3 {
+  font-size: 14px;
+}
+.documentPage > :first-child {
+  margin-top: 0;
+}
+.documentPage :is(p, div) {
+  margin: 0 0 0.5em;
+}
+.documentPage :is(ul, ol) {
+  margin: 0 0 0.6em;
+  padding-left: 22px;
+}
+.documentPage ul {
+  list-style: disc;
+}
+.documentPage ol {
+  list-style: decimal;
+}
+.documentPage blockquote {
+  margin: 0 0 0.6em;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--alpha-accent);
+  color: var(--muted-foreground);
+}
+.documentPage a {
+  color: var(--alpha-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.wordCount {
+  flex-shrink: 0;
+  padding: 5px 22px 5px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 9px;
+  letter-spacing: 0.3px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (max-width: 640px) {
   .hint {
     display: none;
   }
-  .title span {
-    display: none;
-  }
-  .tools button span {
-    display: none;
-  }
   .tools {
-    left: 10px;
+    left: 8px;
+    top: 8px;
+  }
+  .tools button span,
+  .toolCaption {
+    display: none;
+  }
+  .pen {
+    left: 56px;
+    right: 8px;
+    top: 8px;
+    transform: none;
+    max-width: none;
   }
   .notes {
-    right: 10px;
-    width: calc(100% - 80px);
+    right: 8px;
+    top: 56px;
+    width: calc(100% - 72px);
+  }
+  .zoom {
+    right: 8px;
+    bottom: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arrowHandle,
+  .sticky .objectHeader > *,
+  .text .objectHeader {
+    transition: none;
   }
 }

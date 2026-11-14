@@ -2,39 +2,65 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type FormEvent,
 } from "react"
 import {
+  addColumn,
+  addPaletteColor,
   addTask,
   addWhiteboardObject,
-  connectObjects,
   resolveArrow,
+  deleteLabel,
   deleteTask,
   deleteColumn,
   checkpoint,
+  DEFAULT_PALETTE,
   execute,
   HELP,
   initialWorkspace,
+  isHexColor,
+  isWorkspace,
+  linkObjectToTask,
   mergeProposal,
+  normalizeWorkspace,
   parseProposals,
+  removePaletteColor,
+  renameColumn,
   revert,
+  setLabelColor,
   THEMES,
   uid,
   updateTask,
   VERSION,
   VIEWS,
   type CommandResult,
+  type Label,
   type Task,
   type View,
   type Workspace as WorkspaceData,
 } from "@/lib/alpha"
+import {
+  familyFromFile,
+  isFontFile,
+  MAX_FONT_BYTES,
+  parseGoogleFont,
+  type SavedFont,
+} from "@/lib/font"
+import { applyFont, readSavedFont, saveFont } from "@/lib/font-client"
+import { WorkspaceCommands } from "@/contexts/TerminalContext/commands"
+import { useCompletion } from "@/hooks/use-completion"
+import { useWorkspaceSync, type SyncStatus } from "@/hooks/use-workspace-sync"
+import type { Sources } from "@/lib/completion"
 import styles from "./workspace.module.css"
 import { useTheme } from "next-themes"
 import Link from "next/link"
 import Whiteboard from "./Whiteboard"
+import Menu from "./Menu"
+import TrendChart from "./TrendChart"
 
 const STORAGE = "iterationscli.alpha.v1"
 const names: Record<View, string> = {
@@ -55,6 +81,19 @@ const icons: Record<View, string> = {
   history: "↶",
   settings: "◐",
 }
+const syncText: Record<SyncStatus, string> = {
+  checking: "Autosave enabled · checking account sync…",
+  local: "Autosave enabled · local workspace",
+  "signed-out": "Autosave enabled · local workspace · sign in to sync",
+  synced: "Autosave enabled · synced to your account",
+  saving: "Saving to your account…",
+  error: "Saved in this browser · account sync is unavailable right now",
+}
+const stamp = (w: WorkspaceData): WorkspaceData => ({
+  ...w,
+  updated: new Date().toISOString(),
+})
+const labelStyle = (label: Label) => ({ "--label": label.color }) as CSSProperties
 
 export default function Workspace() {
   const { resolvedTheme, setTheme } = useTheme()
@@ -62,12 +101,18 @@ export default function Workspace() {
   const [ready, setReady] = useState(false)
   const [storageError, setStorageError] = useState("")
   const [view, setView] = useState<View>("terminal")
+  const [tabs, setTabs] = useState<View[]>(["terminal"])
   const [split, setSplit] = useState<View | null>(null)
+  const [splitTask, setSplitTask] = useState<string | null>(null)
   const [boardCamera, setBoardCamera] = useState({ x: 0, y: 0, zoom: 1 })
   const boardSize = useRef({ width: 1000, height: 600 })
-  const boardCenter = () => ({ x: (boardSize.current.width / 2 - boardCamera.x) / boardCamera.zoom, y: (boardSize.current.height / 2 - boardCamera.y) / boardCamera.zoom })
+  const boardCenter = () => ({
+    x: (boardSize.current.width / 2 - boardCamera.x) / boardCamera.zoom,
+    y: (boardSize.current.height / 2 - boardCamera.y) / boardCamera.zoom,
+  })
   const [terminalOpen, setTerminalOpen] = useState(false)
   const terminalDialog = useRef<HTMLDialogElement>(null)
+  const mainPrompt = useRef<HTMLInputElement>(null)
   const popupPrompt = useRef<HTMLInputElement>(null)
   const popupEnd = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState("")
@@ -84,29 +129,25 @@ export default function Workspace() {
   const [query, setQuery] = useState("")
   const [labelFilter, setLabelFilter] = useState("")
   const [needsSubmission, setNeedsSubmission] = useState(false)
+  const [renaming, setRenaming] = useState<string | null>(null)
   const [pendingJson, setPendingJson] = useState("")
+  const [font, setFont] = useState<SavedFont | null>(null)
+  const [fontInput, setFontInput] = useState("")
+  const [fontMessage, setFontMessage] = useState("")
+  const [fontBusy, setFontBusy] = useState(false)
 
   const dialog = useRef<HTMLDialogElement>(null)
   const terminalEnd = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => {
+      setFont(readSavedFont())
       try {
         const raw = localStorage.getItem(STORAGE)
         if (raw) {
-          const saved = JSON.parse(raw) as WorkspaceData
-          if (
-            saved.schema !== 1 ||
-            !Array.isArray(saved.tasks) ||
-            !Array.isArray(saved.commits) ||
-            !Array.isArray(saved.columns) ||
-            !Array.isArray(saved.labels) ||
-            !Array.isArray(saved.strokes) ||
-            !Array.isArray(saved.proposals) ||
-            !Array.isArray(saved.merged)
-          )
-            throw new Error("Invalid saved workspace")
-          setW({ ...saved, objects: saved.objects ?? [] })
+          const saved: unknown = JSON.parse(raw)
+          if (!isWorkspace(saved)) throw new Error("Invalid saved workspace")
+          setW(normalizeWorkspace(saved))
         }
         setReady(true)
       } catch {
@@ -132,6 +173,9 @@ export default function Workspace() {
       return () => clearTimeout(timer)
     }
   }, [w, ready])
+  // Mirrors the workspace to the signed-in account when Supabase is configured;
+  // otherwise this stays "local" and browser storage is the only copy.
+  const sync = useWorkspaceSync(w, ready, setW)
   useEffect(() => {
     const text = "Make room for your next idea."
     let n = 0
@@ -186,17 +230,64 @@ export default function Workspace() {
   ) => {
     try {
       const next = fn(w)
-      setW(next)
+      if (next !== w) setW(stamp(next))
       if (message) setNotice(message)
+      return true
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : "Something went wrong."
       )
+      return false
     }
+  }
+  /** Shows a view in the main pane, opening a tab for it if needed. */
+  const open = (next: View) => {
+    setView(next)
+    setTabs((prev) => (prev.includes(next) ? prev : [...prev, next]))
+    if (split === next) setSplit(null)
+  }
+  const closeTab = (tab: View) => {
+    const index = tabs.indexOf(tab)
+    const rest = tabs.filter((t) => t !== tab)
+    if (!rest.length) return
+    setTabs(rest)
+    if (view === tab) setView(rest[Math.max(0, index - 1)])
   }
   const completed = w.tasks.filter((t) => t.done).length
   const pending = w.tasks.filter((t) => t.done && t.submission === "pending")
   const task = w.tasks.find((t) => t.id === selected)
+  const paneTask = w.tasks.find((t) => t.id === splitTask)
+  const sideView = paneTask ? null : split && split !== view ? split : null
+  const palette = w.palette ?? DEFAULT_PALETTE
+  const penColor =
+    w.penColor ?? (isHexColor(w.accent) ? w.accent : DEFAULT_PALETTE[0])
+
+  // Live values the terminal can complete: IDs are shown as the 8-character
+  // prefixes the commands accept.
+  const sources = useMemo<Sources>(
+    () => ({
+      task: w.tasks.map((t) => ({
+        value: t.id.slice(0, 8),
+        description: t.title,
+      })),
+      column: w.columns,
+      label: w.labels.map((l) => l.name),
+      checkpoint: [...w.commits].reverse().map((c) => ({
+        value: c.id.slice(0, 8),
+        description: c.message,
+      })),
+      proposal: w.proposals.map((p) => ({ value: p.id, description: p.title })),
+    }),
+    [w.tasks, w.columns, w.labels, w.commits, w.proposals]
+  )
+  const completion = useCompletion(
+    command,
+    setCommand,
+    WorkspaceCommands,
+    sources,
+    !confirm
+  )
+
   const submitCommand = (event?: FormEvent, override?: string) => {
     event?.preventDefault()
     const input = (override ?? command).trim()
@@ -218,9 +309,11 @@ export default function Workspace() {
             )
           }
           setW(
-            confirm.type === "merge"
-              ? mergeProposal(w, confirm.id)
-              : revert(w, confirm.id)
+            stamp(
+              confirm.type === "merge"
+                ? mergeProposal(w, confirm.id)
+                : revert(w, confirm.id)
+            )
           )
         }
         setConfirm(undefined)
@@ -234,9 +327,12 @@ export default function Workspace() {
         return
       }
       const result = execute(w, input, boardCenter())
-      setW(result.workspace)
-      if (result.view) setView(result.view)
-      if (result.split !== undefined) setSplit(result.split)
+      if (result.workspace !== w) setW(stamp(result.workspace))
+      if (result.view) open(result.view)
+      if (result.split !== undefined) {
+        setSplit(result.split)
+        setSplitTask(null)
+      }
       if (result.confirm) {
         setConfirm(result.confirm)
         reviewedState.current = w
@@ -265,15 +361,145 @@ export default function Workspace() {
     a.click()
     URL.revokeObjectURL(url)
   }
+  async function importBackup(file: File) {
+    try {
+      const saved: unknown = JSON.parse(await file.text())
+      if (!isWorkspace(saved))
+        throw new Error("That file is not an IterationsCLI workspace export.")
+      if (
+        !window.confirm(
+          "Replace this workspace with the backup? Export the current workspace first if you may want it back."
+        )
+      )
+        return
+      setW(stamp(normalizeWorkspace(saved)))
+      setNotice("Backup restored.")
+    } catch (error) {
+      setNotice(
+        error instanceof SyntaxError
+          ? "That file is not valid JSON."
+          : error instanceof Error
+            ? error.message
+            : "Could not read that file."
+      )
+    }
+  }
+  async function chooseFont(next: SavedFont | null) {
+    setFontBusy(true)
+    setFontMessage("")
+    try {
+      const remembered = await saveFont(next)
+      setFont(next)
+      setFontInput("")
+      setFontMessage(
+        !next
+          ? "Back to JetBrains Mono."
+          : remembered
+            ? `Now using ${next.family} across the site.`
+            : `Using ${next.family}, but the file is too large to remember in this browser. Try a .woff2 file.`
+      )
+    } catch (error) {
+      // Put the previous font back; the failed one may have been half-applied.
+      void applyFont(font).catch(() => {})
+      setFontMessage(
+        error instanceof Error ? error.message : "That font could not be loaded."
+      )
+    } finally {
+      setFontBusy(false)
+    }
+  }
+  function uploadFont(file: File) {
+    if (!isFontFile(file.name))
+      return setFontMessage("Choose a .woff2, .woff, .ttf or .otf file.")
+    if (file.size > MAX_FONT_BYTES)
+      return setFontMessage(
+        "That font is larger than 1.5 MB. A .woff2 version is usually much smaller."
+      )
+    const reader = new FileReader()
+    reader.onerror = () => setFontMessage("That file could not be read.")
+    reader.onload = () =>
+      void chooseFont({
+        family: familyFromFile(file.name),
+        source: "file",
+        data: String(reader.result),
+      })
+    reader.readAsDataURL(file)
+  }
+
+  const chip = (label: Label, suffix = "") => (
+    <span key={label.id} className={styles.label} style={labelStyle(label)}>
+      {label.name}
+      {suffix}
+    </span>
+  )
+
+  function sidebar(inPopup = false) {
+    return (
+      <aside
+        className={`${styles.sidebar} ${inPopup ? styles.popupSidebar : ""}`}
+      >
+        {!inPopup && (
+          <Link href="/" className={styles.brand}>
+            <span>i/</span> iterations
+            <span className={styles.brandSuffix}>cli</span>
+          </Link>
+        )}
+        <div className={styles.workspaceName}>
+          <span className={styles.avatar}>P</span>
+          <div>
+            Personal workspace
+            <small>
+              {sync === "synced" || sync === "saving"
+                ? "ACCOUNT SYNC"
+                : "LOCAL ALPHA"}
+            </small>
+          </div>
+        </div>
+        <p className={styles.navLabel}>WORKSPACE</p>
+        <nav aria-label={inPopup ? "Go to view" : "Workspace views"}>
+          {VIEWS.map((tab) => (
+            <button
+              key={tab}
+              className={view === tab ? styles.activeNav : ""}
+              aria-current={view === tab ? "page" : undefined}
+              onClick={() => {
+                open(tab)
+                if (inPopup) setTerminalOpen(false)
+              }}
+            >
+              <span aria-hidden="true">{icons[tab]}</span>
+              {names[tab]}
+              {tab === "inbox" && w.proposals.length > 0 && (
+                <small>{w.proposals.length}</small>
+              )}
+            </button>
+          ))}
+        </nav>
+        {!inPopup && (
+          <div className={styles.sidebarBottom}>
+            <span className={styles.onlineDot} /> Personal ·{" "}
+            {sync === "synced" || sync === "saving"
+              ? "account sync"
+              : "browser storage"}
+            <p>{VERSION}</p>
+            <span>Built for the work in progress.</span>
+          </div>
+        )}
+      </aside>
+    )
+  }
 
   function terminal(popup = false) {
     const inputId = popup ? "workspace-popup-command" : "alpha-command"
+    const prompt = popup ? popupPrompt : mainPrompt
     return (
       <section className={styles.terminal} aria-label="Terminal">
         <div className={styles.terminalHeading}>
-          <span className={styles.dots}>● ● ●</span>
+          <span className={styles.dots} aria-hidden="true">
+            ● ● ●
+          </span>
           <span>iterations / personal workspace</span>
-          <span>LOCAL</span>
+          <span>{sync === "synced" || sync === "saving" ? "SYNCED" : "LOCAL"}</span>
         </div>
         <div className={styles.terminalBody}>
           {!popup && (
@@ -308,7 +534,7 @@ export default function Workspace() {
                 >
                   + Create a task
                 </button>
-                <button onClick={() => setView("board")}>Open board ↗</button>
+                <button onClick={() => open("board")}>Open board ↗</button>
                 <button onClick={() => submitCommand(undefined, "help")}>
                   Explore commands ↗
                 </button>
@@ -319,7 +545,13 @@ export default function Workspace() {
             {log.map((line, i) => (
               <pre
                 key={i}
-                className={line.startsWith(">") ? styles.commandLine : ""}
+                className={
+                  line.startsWith(">")
+                    ? styles.commandLine
+                    : line.startsWith("Error:")
+                      ? styles.errorLine
+                      : ""
+                }
               >
                 {line}
               </pre>
@@ -338,55 +570,251 @@ export default function Workspace() {
             </button>
           </div>
         )}
-        <form onSubmit={submitCommand} className={styles.prompt}>
-          <label htmlFor={inputId}>{confirm ? "Y/N" : "you ~"} ❯</label>
-          <input
-            id={inputId}
-            ref={popup ? popupPrompt : undefined}
-            autoComplete="off"
-            spellCheck={false}
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder={
-              confirm
-                ? "Review above, then Y or N"
-                : 'Try: task new "Build something good"'
-            }
-            onKeyDown={(e) => {
-              if (e.ctrlKey && e.key.toLowerCase() === "l") {
-                e.preventDefault()
-                setLog([])
-              }
-              if (
-                e.ctrlKey &&
-                e.key.toLowerCase() === "c" &&
-                e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-              ) {
-                e.preventDefault()
-                setCommand("")
-                setConfirm(undefined)
-                setLog((prev) => [...prev, "^C Cancelled."])
-              }
-              if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-                e.preventDefault()
-                historyIndex.current = Math.max(
-                  0,
-                  Math.min(
-                    commands.length,
-                    historyIndex.current + (e.key === "ArrowUp" ? -1 : 1)
-                  )
-                )
-                setCommand(commands[historyIndex.current] ?? "")
-              }
-            }}
-          />
-          <button type="submit" aria-label="Run command">
-            ↵
-          </button>
-        </form>
+        <div className={styles.promptDock}>
+          {completion.candidates.length > 0 && (
+            <div
+              className={styles.suggestions}
+              role="listbox"
+              aria-label="Completions"
+              id={`${inputId}-completions`}
+            >
+              {completion.candidates.slice(0, 8).map((c, i) => (
+                <button
+                  type="button"
+                  role="option"
+                  key={c.value}
+                  aria-selected={i === completion.active}
+                  tabIndex={-1}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    completion.accept(c.value)
+                    prompt.current?.focus()
+                  }}
+                >
+                  <b>{c.value}</b>
+                  {c.description && <span>{c.description}</span>}
+                </button>
+              ))}
+              {completion.candidates.length > 8 && (
+                <span>+{completion.candidates.length - 8} more</span>
+              )}
+              <kbd>Tab</kbd>
+            </div>
+          )}
+          <form onSubmit={submitCommand} className={styles.prompt}>
+            <label htmlFor={inputId}>{confirm ? "Y/N" : "you ~"} ❯</label>
+            <div className={styles.promptField}>
+              <div className={styles.ghost} aria-hidden="true">
+                <span>{command}</span>
+                {completion.suggestion}
+              </div>
+              <input
+                id={inputId}
+                ref={prompt}
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                role="combobox"
+                aria-expanded={completion.candidates.length > 0}
+                aria-controls={`${inputId}-completions`}
+                aria-autocomplete="both"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={
+                  confirm
+                    ? "Review above, then Y or N"
+                    : 'Try: task new "Build something good"'
+                }
+                onKeyDown={(e) => {
+                  if (completion.onKeyDown(e)) return
+                  if (e.ctrlKey && e.key.toLowerCase() === "l") {
+                    e.preventDefault()
+                    setLog([])
+                  }
+                  if (
+                    e.ctrlKey &&
+                    e.key.toLowerCase() === "c" &&
+                    e.currentTarget.selectionStart ===
+                      e.currentTarget.selectionEnd
+                  ) {
+                    e.preventDefault()
+                    setCommand("")
+                    setConfirm(undefined)
+                    setLog((prev) => [...prev, "^C Cancelled."])
+                  }
+                  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                    e.preventDefault()
+                    historyIndex.current = Math.max(
+                      0,
+                      Math.min(
+                        commands.length,
+                        historyIndex.current + (e.key === "ArrowUp" ? -1 : 1)
+                      )
+                    )
+                    setCommand(commands[historyIndex.current] ?? "")
+                  }
+                }}
+              />
+            </div>
+            <button type="submit" aria-label="Run command">
+              ↵
+            </button>
+          </form>
+        </div>
       </section>
     )
   }
+
+  function ticket(task: Task, close: () => void, pane = false) {
+    return (
+      <div className={`${styles.ticketPanel} ${pane ? styles.ticketPane : ""}`}>
+        <div className={styles.ticketHead}>
+          <div>
+            <p className={styles.eyebrow}>TICKET</p>
+            <code title={task.id}>{task.id.slice(0, 8)}</code>
+          </div>
+          <button
+            className={styles.iconButton}
+            aria-label="Close ticket"
+            title="Close"
+            onClick={close}
+          >
+            ×
+          </button>
+        </div>
+        <label className={styles.field}>
+          Title
+          <input
+            value={task.title}
+            onChange={(e) =>
+              change((w) => updateTask(w, task.id, { title: e.target.value }))
+            }
+          />
+        </label>
+        <div className={styles.fieldRow}>
+          <label className={styles.field}>
+            Column
+            <select
+              value={task.column}
+              onChange={(e) =>
+                change((w) =>
+                  updateTask(w, task.id, { column: e.target.value })
+                )
+              }
+            >
+              {w.columns.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.field}>
+            Submission
+            <select
+              value={task.submission}
+              onChange={(e) =>
+                change((w) =>
+                  updateTask(w, task.id, {
+                    submission: e.target.value as Task["submission"],
+                  })
+                )
+              }
+            >
+              <option value="none">Not applicable</option>
+              <option value="pending">Not submitted</option>
+              <option value="submitted">Submitted</option>
+            </select>
+          </label>
+        </div>
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            checked={task.done}
+            onChange={(e) =>
+              change((w) => updateTask(w, task.id, { done: e.target.checked }))
+            }
+          />
+          Completed
+        </label>
+        <h2>Labels</h2>
+        {w.labels.length ? (
+          <div className={styles.badges}>
+            {w.labels.map((l) => (
+              <label
+                key={l.id}
+                className={`${styles.label} ${styles.labelToggle}`}
+                style={labelStyle(l)}
+              >
+                <input
+                  type="checkbox"
+                  checked={task.labels.includes(l.id)}
+                  onChange={(e) =>
+                    change((w) =>
+                      updateTask(w, task.id, {
+                        labels: e.target.checked
+                          ? [...task.labels, l.id]
+                          : task.labels.filter((id) => id !== l.id),
+                      })
+                    )
+                  }
+                />
+                {l.name}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className={styles.hint}>
+            Create labels in Customize or with label new.
+          </p>
+        )}
+        <h2>
+          Comments <small>{task.comments.length}</small>
+        </h2>
+        {task.comments.map((c, i) => (
+          <p className={styles.comment} key={i}>
+            {c}
+          </p>
+        ))}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            const text = formText(e, "comment")
+            if (text) {
+              change((w) =>
+                updateTask(w, task.id, {
+                  comments: [...task.comments, text],
+                })
+              )
+              e.currentTarget.reset()
+            }
+          }}
+        >
+          <textarea
+            name="comment"
+            required
+            aria-label="Comment"
+            placeholder="Add context or a note…"
+          />
+          <button>Add comment</button>
+        </form>
+        <div className={styles.ticketFoot}>
+          <span>Created {new Date(task.created).toLocaleDateString()}</span>
+          <button
+            className={styles.danger}
+            onClick={() => {
+              close()
+              change(
+                (w) => deleteTask(w, task.id),
+                "Task deleted. Restore its checkpoint in History to undo."
+              )
+            }}
+          >
+            Delete task
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   function board() {
     const visible = w.tasks.filter(
       (t) =>
@@ -405,7 +833,7 @@ export default function Workspace() {
           </div>
           <button
             onClick={() => {
-              setView("terminal")
+              open("terminal")
               setCommand('task new ""')
             }}
           >
@@ -458,108 +886,150 @@ export default function Workspace() {
           <button className={styles.primary}>+ Add task</button>
         </form>
         <div className={styles.board}>
-          {w.columns.map((column) => (
-            <div
-              className={styles.column}
-              key={column}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault()
-                const id = e.dataTransfer.getData("text/plain")
-                if (w.tasks.some((t) => t.id === id))
-                  change((w) => updateTask(w, id, { column }))
-              }}
-            >
-              <h2>
-                <span className={styles.columnDot} />
-                {column}
-                <small>
-                  {visible.filter((t) => t.column === column).length}
-                </small>
-              </h2>
-              <button
-                disabled={w.columns.length === 1}
-                title={`Tasks move to ${w.columns.find((c) => c !== column) ?? "another column"}. A restore checkpoint is saved.`}
-                onClick={() =>
-                  change(
-                    (w) => deleteColumn(w, column),
-                    `Column deleted. Tasks moved to ${w.columns.find((c) => c !== column)}. Undo in History.`
-                  )
-                }
+          {w.columns.map((column) => {
+            const fallback = w.columns.find((c) => c !== column)
+            return (
+              <div
+                className={styles.column}
+                key={column}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const id = e.dataTransfer.getData("text/plain")
+                  if (w.tasks.some((t) => t.id === id))
+                    change((w) => updateTask(w, id, { column }))
+                }}
               >
-                Delete column
-              </button>
-              {visible
-                .filter((t) => t.column === column)
-                .map((t) => (
-                  <article
-                    key={t.id}
-                    className={styles.ticket}
-                    draggable
-                    onDragStart={(e) =>
-                      e.dataTransfer.setData("text/plain", t.id)
-                    }
-                  >
-                    <div className={styles.ticketTop}>
-                      <span>{t.id.slice(0, 8)}</span>
-                      <input
-                        type="checkbox"
-                        checked={t.done}
-                        aria-label={`Complete ${t.title}`}
-                        onChange={(e) =>
+                <div className={styles.columnHead}>
+                  <span className={styles.columnDot} />
+                  {renaming === column ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        if (
                           change((w) =>
-                            updateTask(w, t.id, { done: e.target.checked })
+                            renameColumn(w, column, formText(e, "name"))
                           )
-                        }
-                      />
-                    </div>
-                    <button
-                      className={`${styles.ticketTitle} ${t.done ? styles.done : ""}`}
-                      onClick={() => setSelected(t.id)}
+                        )
+                          setRenaming(null)
+                      }}
                     >
-                      {t.title}
-                    </button>
-                    <div className={styles.badges}>
-                      {t.labels.map((id) => {
-                        const label = w.labels.find((l) => l.id === id)
-                        return label ? (
-                          <span key={id} style={{ color: label.color }}>
-                            {label.name}
-                          </span>
-                        ) : null
-                      })}
-                      {t.submission !== "none" && (
-                        <span>
-                          {t.submission === "pending"
-                            ? "Not submitted"
-                            : "Submitted"}
-                        </span>
-                      )}
-                    </div>
-                    <div className={styles.ticketFoot}>
-                      <span>{t.comments.length} comments</span>
-                      <button onClick={() => setSelected(t.id)}>
-                        Details ↗
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              {!visible.some((t) => t.column === column) && (
-                <div className={styles.emptyColumn}>
-                  Room for your next step.
+                      <input
+                        name="name"
+                        required
+                        autoFocus
+                        defaultValue={column}
+                        aria-label={`Rename ${column}`}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onBlur={() => setRenaming(null)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") setRenaming(null)
+                        }}
+                      />
+                    </form>
+                  ) : (
+                    <h2 onDoubleClick={() => setRenaming(column)}>{column}</h2>
+                  )}
+                  <small>
+                    {visible.filter((t) => t.column === column).length}
+                  </small>
+                  <Menu
+                    label={`${column} column options`}
+                    className={styles.moreButton}
+                    items={[
+                      {
+                        label: "Rename",
+                        onSelect: () => setRenaming(column),
+                      },
+                      {
+                        label: "Delete column",
+                        danger: true,
+                        disabled: !fallback,
+                        title: fallback
+                          ? `Tasks move to ${fallback}. A restore checkpoint is saved.`
+                          : "Keep at least one column.",
+                        onSelect: () =>
+                          change(
+                            (w) => deleteColumn(w, column),
+                            `Column deleted. Tasks moved to ${fallback}. Undo in History.`
+                          ),
+                      },
+                    ]}
+                  >
+                    ⋯
+                  </Menu>
                 </div>
-              )}
-            </div>
-          ))}
+                {visible
+                  .filter((t) => t.column === column)
+                  .map((t) => (
+                    <article
+                      key={t.id}
+                      className={styles.ticket}
+                      draggable
+                      onDragStart={(e) =>
+                        e.dataTransfer.setData("text/plain", t.id)
+                      }
+                    >
+                      <div className={styles.ticketTop}>
+                        <span>{t.id.slice(0, 8)}</span>
+                        <input
+                          type="checkbox"
+                          checked={t.done}
+                          aria-label={`Complete ${t.title}`}
+                          onChange={(e) =>
+                            change((w) =>
+                              updateTask(w, t.id, { done: e.target.checked })
+                            )
+                          }
+                        />
+                      </div>
+                      <button
+                        className={`${styles.ticketTitle} ${t.done ? styles.done : ""}`}
+                        onClick={() => setSelected(t.id)}
+                      >
+                        {t.title}
+                      </button>
+                      {(t.labels.length > 0 || t.submission !== "none") && (
+                        <div className={styles.badges}>
+                          {t.labels.map((id) => {
+                            const label = w.labels.find((l) => l.id === id)
+                            return label ? chip(label) : null
+                          })}
+                          {t.submission !== "none" && (
+                            <span className={styles.badge}>
+                              {t.submission === "pending"
+                                ? "Not submitted"
+                                : "Submitted"}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className={styles.ticketFoot}>
+                        <span>
+                          {t.comments.length}{" "}
+                          {t.comments.length === 1 ? "comment" : "comments"}
+                        </span>
+                        <button onClick={() => setSelected(t.id)}>
+                          Details ↗
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                {!visible.some((t) => t.column === column) && (
+                  <div className={styles.emptyColumn}>
+                    Room for your next step.
+                  </div>
+                )}
+              </div>
+            )
+          })}
           <form
             className={styles.newColumn}
             onSubmit={(e) => {
               e.preventDefault()
-              const name = formText(e, "column")
-              if (name && !w.columns.includes(name)) {
-                change((w) => ({ ...w, columns: [...w.columns, name] }))
-                e.currentTarget.reset()
-              }
+              const form = e.currentTarget
+              if (change((w) => addColumn(w, formText(e, "column"))))
+                form.reset()
             }}
           >
             <input
@@ -572,8 +1042,9 @@ export default function Workspace() {
           </form>
         </div>
         <p className={styles.hint}>
-          Drag tickets between columns, or move them in Details. Completion is
-          separate from column and submission status.
+          Drag tickets between columns, or move them in Details. Use ⋯ on a
+          column to rename or delete it. Completion is separate from column and
+          submission status.
         </p>
       </section>
     )
@@ -583,8 +1054,9 @@ export default function Workspace() {
       <Whiteboard
         camera={boardCamera}
         setCamera={setBoardCamera}
-        onSize={size => { boardSize.current = size }}
-        onConnect={(from, to) => change(w => connectObjects(w, from, to), "Connected. The arrow follows both items.")}
+        onSize={(size) => {
+          boardSize.current = size
+        }}
         objects={w.objects ?? []}
         tasks={w.tasks}
         columns={w.columns}
@@ -600,15 +1072,34 @@ export default function Workspace() {
           change(
             (w) => ({
               ...checkpoint(w, "Before deleting whiteboard object"),
-              objects: w.objects.filter((o) => o.id !== id).map(o => {
-                if (o.kind !== "arrow" || (o.from?.objectId !== id && o.to?.objectId !== id)) return o
-                return { ...resolveArrow(o, w.objects), from: o.from?.objectId === id ? undefined : o.from, to: o.to?.objectId === id ? undefined : o.to }
-              }),
+              objects: w.objects
+                .filter((o) => o.id !== id)
+                .map((o) => {
+                  if (
+                    o.kind !== "arrow" ||
+                    (o.from?.objectId !== id && o.to?.objectId !== id)
+                  )
+                    return o
+                  return {
+                    ...resolveArrow(o, w.objects),
+                    from: o.from?.objectId === id ? undefined : o.from,
+                    to: o.to?.objectId === id ? undefined : o.to,
+                  }
+                }),
             }),
             "Object deleted. Undo in History."
           )
         }
-        onObjectAdd={(kind) => change((w) => addWhiteboardObject(w, kind, "", boardCenter()))}
+        onObjectAdd={(kind) =>
+          change((w) => addWhiteboardObject(w, kind, "", boardCenter()))
+        }
+        onLinkTicket={(id) =>
+          change(
+            (w) => linkObjectToTask(w, id),
+            "Ticket link added. Choose its ticket on the new node."
+          )
+        }
+        onOpenTask={(id) => setSplitTask(id)}
         onBoardTask={(title, column) =>
           change((w) => {
             const next = addTask(w, title)
@@ -618,7 +1109,18 @@ export default function Workspace() {
         onTaskChange={(id, patch) => change((w) => updateTask(w, id, patch))}
         strokes={w.strokes}
         notes={w.notes}
-        color={w.accent}
+        color={penColor}
+        palette={palette}
+        penWidth={w.penWidth ?? 3}
+        onPen={({ color, width }) =>
+          change((w) => ({
+            ...w,
+            penColor: color ?? w.penColor,
+            penWidth: width ?? w.penWidth,
+          }))
+        }
+        onPaletteAdd={(color) => change((w) => addPaletteColor(w, color))}
+        onPaletteRemove={(color) => change((w) => removePaletteColor(w, color))}
         onStroke={(stroke) =>
           change((w) => ({ ...w, strokes: [...w.strokes, stroke] }))
         }
@@ -641,20 +1143,15 @@ export default function Workspace() {
     const percent = w.tasks.length
       ? Math.round((completed / w.tasks.length) * 100)
       : 0
-    const days = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date()
-      d.setDate(d.getDate() - 6 + i)
-      return {
-        label: d.toLocaleDateString(undefined, { weekday: "short" }),
-        count: w.tasks.filter(
-          (t) =>
-            t.done &&
-            t.completed &&
-            new Date(t.completed).toDateString() === d.toDateString()
-        ).length,
-      }
-    })
-    const max = Math.max(1, ...days.map((d) => d.count))
+    const progress = (name: string, done: number, total: number, key: string) => (
+      <div className={styles.progressRow} key={key}>
+        <span>{name}</span>
+        <progress max={total || 1} value={done} />
+        <span>
+          {done}/{total}
+        </span>
+      </div>
+    )
     return (
       <section className={styles.view}>
         <p className={styles.eyebrow}>SMALL STEPS. VISIBLE PROGRESS.</p>
@@ -672,45 +1169,55 @@ export default function Workspace() {
             </div>
           ))}
         </div>
-        <div className={styles.panel}>
-          <h2>Completed in the last 7 days</h2>
-          <p className={styles.muted}>
-            Current completed tasks, grouped by completion date.
-          </p>
-          <div
-            className={styles.chart}
-            role="img"
-            aria-label={days.map((d) => `${d.label}: ${d.count}`).join(", ")}
-          >
-            {days.map((d, i) => (
-              <div className={styles.barColumn} key={i}>
-                <span>{d.count}</span>
-                <div className={styles.barTrack}>
-                  <div
-                    className={styles.bar}
-                    style={{ height: `${(d.count / max) * 100}%` }}
-                  />
-                </div>
-                <small>{d.label}</small>
-              </div>
-            ))}
+        {!w.tasks.length && (
+          <div className={styles.empty}>
+            Nothing to measure yet.
+            <span>
+              Create a task on the board or with task new, and your progress
+              shows up here.
+            </span>
           </div>
-        </div>
-        <div className={styles.panel}>
-          <h2>By column</h2>
-          {w.columns.map((c) => {
-            const total = w.tasks.filter((t) => t.column === c).length
-            const done = w.tasks.filter((t) => t.column === c && t.done).length
-            return (
-              <div className={styles.progressRow} key={c}>
-                <span>{c}</span>
-                <progress max={total || 1} value={done} />
+        )}
+        <TrendChart tasks={w.tasks} />
+        <div className={styles.panelGrid}>
+          <div className={styles.panel}>
+            <h2>By column</h2>
+            {w.columns.map((c) =>
+              progress(
+                c,
+                w.tasks.filter((t) => t.column === c && t.done).length,
+                w.tasks.filter((t) => t.column === c).length,
+                c
+              )
+            )}
+          </div>
+          <div className={styles.panel}>
+            <h2>By label</h2>
+            {w.labels.map((l) => (
+              <div className={styles.progressRow} key={l.id}>
+                {chip(l)}
+                <progress
+                  max={w.tasks.filter((t) => t.labels.includes(l.id)).length || 1}
+                  value={
+                    w.tasks.filter((t) => t.labels.includes(l.id) && t.done)
+                      .length
+                  }
+                />
                 <span>
-                  {done}/{total}
+                  {
+                    w.tasks.filter((t) => t.labels.includes(l.id) && t.done)
+                      .length
+                  }
+                  /{w.tasks.filter((t) => t.labels.includes(l.id)).length}
                 </span>
               </div>
-            )
-          })}
+            ))}
+            {!w.labels.length && (
+              <p className={styles.hint}>
+                No labels yet. Create them in Customize.
+              </p>
+            )}
+          </div>
         </div>
       </section>
     )
@@ -735,7 +1242,7 @@ export default function Workspace() {
                 <code>{p.id}</code>
               </div>
               <h2>{p.title}</h2>
-              <p>
+              <p className={styles.muted}>
                 {old
                   ? `Update: “${old.title}” → “${p.title}”${p.done !== undefined ? ` · Completed: ${old.done ? "yes" : "no"} → ${p.done ? "yes" : "no"}` : ""}`
                   : "Create a new task in the first column"}
@@ -744,7 +1251,7 @@ export default function Workspace() {
                 <button
                   className={styles.primary}
                   onClick={() => {
-                    setView("terminal")
+                    open("terminal")
                     submitCommand(undefined, `merge "${p.id}"`)
                   }}
                 >
@@ -777,13 +1284,19 @@ export default function Workspace() {
           className={styles.panel}
           onSubmit={(e) => {
             e.preventDefault()
-            change(
-              (w) => ({
-                ...w,
-                proposals: [...w.proposals, ...parseProposals(pendingJson, w)],
-              }),
-              "Proposals imported. Review before merging."
+            if (
+              change(
+                (w) => ({
+                  ...w,
+                  proposals: [
+                    ...w.proposals,
+                    ...parseProposals(pendingJson, w),
+                  ],
+                }),
+                "Proposals imported. Review before merging."
+              )
             )
+              setPendingJson("")
           }}
         >
           <h2>Import proposals</h2>
@@ -800,7 +1313,29 @@ export default function Workspace() {
               '[{"id":"example-1","title":"Review the design","source":"Manual import"}]'
             }
           />
-          <button>Import for review</button>
+          <div className={styles.actions}>
+            <button className={styles.primary}>Import for review</button>
+            <button
+              type="button"
+              onClick={() =>
+                setPendingJson(
+                  JSON.stringify(
+                    [
+                      {
+                        id: `example-${uid().slice(0, 6)}`,
+                        title: "Review the design",
+                        source: "Manual import",
+                      },
+                    ],
+                    null,
+                    2
+                  )
+                )
+              }
+            >
+              Insert example
+            </button>
+          </div>
         </form>
       </section>
     )
@@ -809,10 +1344,13 @@ export default function Workspace() {
     return (
       <section className={styles.view}>
         <p className={styles.eyebrow}>MOVE FORWARD. KEEP A WAY BACK.</p>
-        <h1>Workspace history</h1>
+        <h1>
+          Workspace history <small>{w.commits.length}</small>
+        </h1>
         <p className={styles.muted}>
-          Named checkpoints save tasks, columns, labels, drawings, and notes.
-          Restoring preserves the history and saves the current state first.
+          Named checkpoints save tasks, columns, labels, whiteboard items,
+          drawings, and notes. Restoring preserves the history and saves the
+          current state first.
         </p>
         <form
           className={styles.inlineForm}
@@ -833,26 +1371,31 @@ export default function Workspace() {
           />
           <button className={styles.primary}>Save checkpoint</button>
         </form>
-        {[...w.commits].reverse().map((c) => (
-          <div className={styles.historyRow} key={c.id}>
-            <code title={c.id}>{c.id.slice(0, 8)}</code>
-            <div>
-              <strong>{c.message}</strong>
-              <span>
-                {new Date(c.date).toLocaleString()} · {c.snapshot.tasks.length}{" "}
-                tasks
-              </span>
-            </div>
-            <button
-              onClick={() => {
-                setView("terminal")
-                submitCommand(undefined, `revert ${c.id}`)
-              }}
-            >
-              Restore…
-            </button>
+        {w.commits.length > 0 && (
+          <div className={styles.historyList}>
+            {[...w.commits].reverse().map((c) => (
+              <div className={styles.historyRow} key={c.id}>
+                <code title={c.id}>{c.id.slice(0, 8)}</code>
+                <div>
+                  <strong>{c.message}</strong>
+                  <span>
+                    {new Date(c.date).toLocaleString()} ·{" "}
+                    {c.snapshot.tasks.length} tasks ·{" "}
+                    {(c.snapshot.objects ?? []).length} whiteboard items
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    open("terminal")
+                    submitCommand(undefined, `revert ${c.id}`)
+                  }}
+                >
+                  Restore…
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
         {!w.commits.length && (
           <div className={styles.empty}>
             Your story starts here.
@@ -873,13 +1416,6 @@ export default function Workspace() {
             Original follows the website’s black-and-white theme. Optional
             palettes change the accent color.
           </p>
-          <button
-            onClick={() =>
-              setTheme(resolvedTheme === "dark" ? "light" : "dark")
-            }
-          >
-            Toggle light / dark
-          </button>
           <div className={styles.swatches}>
             {Object.entries(THEMES).map(([name, color]) => (
               <button
@@ -893,38 +1429,123 @@ export default function Workspace() {
                 {name}
               </button>
             ))}
+            <label className={styles.customAccent} data-active={w.theme === "custom"}>
+              <input
+                type="color"
+                value={w.accent}
+                onChange={(e) =>
+                  change((w) => ({
+                    ...w,
+                    accent: e.target.value,
+                    theme: "custom",
+                  }))
+                }
+              />
+              Custom accent
+            </label>
           </div>
-          <label className={styles.colorLabel}>
-            Custom accent
-            <input
-              type="color"
-              value={w.accent}
-              onChange={(e) =>
-                change((w) => ({
-                  ...w,
-                  accent: e.target.value,
-                  theme: "custom",
-                }))
+          <div className={styles.actions}>
+            <button
+              onClick={() =>
+                setTheme(resolvedTheme === "dark" ? "light" : "dark")
               }
-            />
-          </label>
-          <label className={styles.colorLabel}>
-            <input
-              type="checkbox"
-              checked={w.scanlines}
-              onChange={(e) =>
-                change((w) => ({ ...w, scanlines: e.target.checked }))
+            >
+              Switch to {resolvedTheme === "dark" ? "light" : "dark"} mode
+            </button>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={w.scanlines}
+                onChange={(e) =>
+                  change((w) => ({ ...w, scanlines: e.target.checked }))
+                }
+              />
+              Subtle retro scanlines
+            </label>
+          </div>
+        </div>
+        <div className={styles.panel}>
+          <h2>Typography</h2>
+          <p className={styles.muted}>
+            Change the font used across the site. It is remembered in this
+            browser.
+          </p>
+          <div className={styles.fontCurrent}>
+            <div>
+              <strong>{font?.family ?? "JetBrains Mono"}</strong>
+              <small>
+                {font
+                  ? font.source === "google"
+                    ? "Google Fonts"
+                    : "Uploaded file"
+                  : "Default"}
+              </small>
+            </div>
+            <p aria-hidden="true">
+              The quick brown fox jumps over the lazy dog. 0123456789 {"{ }"}{" "}
+              =&gt; !=
+            </p>
+            {font && (
+              <button disabled={fontBusy} onClick={() => void chooseFont(null)}>
+                Reset to default
+              </button>
+            )}
+          </div>
+          <form
+            className={styles.inlineForm}
+            onSubmit={(e) => {
+              e.preventDefault()
+              try {
+                void chooseFont({
+                  ...parseGoogleFont(fontInput),
+                  source: "google",
+                })
+              } catch (error) {
+                setFontMessage(
+                  error instanceof Error ? error.message : "Invalid font."
+                )
               }
+            }}
+          >
+            <input
+              required
+              value={fontInput}
+              onChange={(e) => setFontInput(e.target.value)}
+              aria-label="Google Fonts name or link"
+              placeholder='Google Fonts name or link, e.g. "Fira Code"'
             />
-            Subtle retro scanlines
-          </label>
+            <button disabled={fontBusy}>
+              {fontBusy ? "Loading…" : "Use font"}
+            </button>
+            <label className={styles.fileButton}>
+              Upload font file…
+              <input
+                type="file"
+                accept=".woff2,.woff,.ttf,.otf,font/*"
+                disabled={fontBusy}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) uploadFont(file)
+                  e.target.value = ""
+                }}
+              />
+            </label>
+          </form>
+          {fontMessage && (
+            <p className={styles.formMessage} role="status">
+              {fontMessage}
+            </p>
+          )}
           <p className={styles.hint}>
-            JetBrains Mono typography. Animation respects reduced-motion
-            preferences.
+            Google fonts load from fonts.googleapis.com. Uploads accept .woff2,
+            .woff, .ttf and .otf up to 1.5 MB and stay on this device.
+            Animation respects reduced-motion preferences.
           </p>
         </div>
         <div className={styles.panel}>
-          <h2>Labels</h2>
+          <h2>
+            Labels <small>{w.labels.length}</small>
+          </h2>
           <p className={styles.muted}>
             Global labels are available workspace-wide; local labels belong to
             this board. This alpha has one board.
@@ -955,6 +1576,13 @@ export default function Workspace() {
             }}
           >
             <input
+              name="color"
+              type="color"
+              defaultValue={isHexColor(w.accent) ? w.accent : "#60a5fa"}
+              aria-label="Label color"
+              title="Label color"
+            />
+            <input
               name="name"
               required
               placeholder="Label name"
@@ -964,29 +1592,73 @@ export default function Workspace() {
               <option value="global">Global</option>
               <option value="local">Local</option>
             </select>
-            <input
-              name="color"
-              type="color"
-              defaultValue={w.accent}
-              aria-label="Label color"
-            />
             <button>Add label</button>
           </form>
-          <div className={styles.badges}>
-            {w.labels.map((l) => (
-              <span key={l.id} style={{ color: l.color }}>
-                {l.name} / {l.scope}
-              </span>
-            ))}
-          </div>
+          {w.labels.length > 0 && (
+            <ul className={styles.labelList}>
+              {w.labels.map((l) => (
+                <li key={l.id}>
+                  <input
+                    type="color"
+                    value={isHexColor(l.color) ? l.color : "#777777"}
+                    aria-label={`Color of ${l.name}`}
+                    title="Change color"
+                    onChange={(e) =>
+                      change((w) => setLabelColor(w, l.id, e.target.value))
+                    }
+                  />
+                  {chip(l)}
+                  <small>{l.scope}</small>
+                  <small>
+                    {w.tasks.filter((t) => t.labels.includes(l.id)).length}{" "}
+                    tasks
+                  </small>
+                  <button
+                    className={styles.iconButton}
+                    aria-label={`Delete label ${l.name}`}
+                    title="Delete label"
+                    onClick={() =>
+                      change(
+                        (w) =>
+                          deleteLabel(
+                            checkpoint(w, `Before deleting label: ${l.name}`),
+                            l.id
+                          ),
+                        "Label deleted. Undo in History."
+                      )
+                    }
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className={styles.panel}>
           <h2>Your data</h2>
           <p className={styles.muted}>
-            Stored in this browser on this device. No account or cloud sync is
-            required. Export backups before clearing browser data.
+            {sync === "synced" || sync === "saving" || sync === "error"
+              ? "Saved in this browser and synced to your account. Sign in on another device to pick up where you left off."
+              : sync === "signed-out"
+                ? "Stored in this browser on this device. Sign in from the home page to sync this workspace to your account."
+                : "Stored in this browser on this device. No account or cloud sync is required. Export backups before clearing browser data."}
           </p>
-          <button onClick={exportBackup}>Export workspace JSON ↓</button>
+          <div className={styles.actions}>
+            <button onClick={exportBackup}>Export workspace JSON ↓</button>
+            <label className={styles.fileButton}>
+              Restore from backup…
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void importBackup(file)
+                  e.target.value = ""
+                }}
+              />
+            </label>
+          </div>
           <p className={styles.hint}>
             Alpha {VERSION} · Under active rework and testing.
           </p>
@@ -1000,6 +1672,7 @@ export default function Workspace() {
   }
   const render = (tab: View) =>
     ({ terminal, board, canvas, stats, inbox, history, settings })[tab]()
+  const unopened = VIEWS.filter((v) => !tabs.includes(v))
   return (
     <main
       className={`${styles.shell} ${w.scanlines ? styles.scanlines : ""}`}
@@ -1010,39 +1683,7 @@ export default function Workspace() {
         } as CSSProperties
       }
     >
-      <aside className={styles.sidebar}>
-        <Link href="/" className={styles.brand}>
-          <span>i/</span> iterations
-          <span className={styles.brandSuffix}>cli</span>
-        </Link>
-        <div className={styles.workspaceName}>
-          <span className={styles.avatar}>P</span>
-          <div>
-            Personal workspace<small>LOCAL ALPHA</small>
-          </div>
-        </div>
-        <p className={styles.navLabel}>WORKSPACE</p>
-        <nav aria-label="Workspace views">
-          {VIEWS.map((tab) => (
-            <button
-              key={tab}
-              className={view === tab ? styles.activeNav : ""}
-              onClick={() => setView(tab)}
-            >
-              <span>{icons[tab]}</span>
-              {names[tab]}
-              {tab === "inbox" && w.proposals.length > 0 && (
-                <small>{w.proposals.length}</small>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className={styles.sidebarBottom}>
-          <span className={styles.onlineDot} /> Personal · browser storage
-          <p>00.01.00-alpha.1</p>
-          <span>Built for the work in progress.</span>
-        </div>
-      </aside>
+      {sidebar()}
       <div className={styles.main}>
         <header className={styles.topbar}>
           <span>
@@ -1062,10 +1703,18 @@ export default function Workspace() {
               Split view
               <select
                 aria-label="Split view"
-                value={split ?? ""}
-                onChange={(e) => setSplit((e.target.value as View) || null)}
+                value={paneTask ? "ticket" : (sideView ?? "")}
+                onChange={(e) => {
+                  setSplitTask(null)
+                  setSplit(
+                    e.target.value === "ticket"
+                      ? null
+                      : (e.target.value as View) || null
+                  )
+                }}
               >
                 <option value="">Off</option>
+                {paneTask && <option value="ticket">Ticket</option>}
                 {VIEWS.filter((v) => v !== "terminal" && v !== view).map(
                   (v) => (
                     <option key={v} value={v}>
@@ -1077,24 +1726,48 @@ export default function Workspace() {
             </label>
           </div>
         </header>
-        <div className={styles.tabbar}>
-          {[
-            ...new Set(["terminal" as View, view, ...(split ? [split] : [])]),
-          ].map((v) => (
-            <button
+        <div className={styles.tabbar} role="tablist" aria-label="Open views">
+          {tabs.map((v) => (
+            <div
               key={v}
-              className={view === v ? styles.activeTab : ""}
-              onClick={() => {
-                if (split === v) setSplit(null)
-                setView(v)
-              }}
+              className={`${styles.tab} ${view === v ? styles.activeTab : ""}`}
             >
-              {icons[v]} {names[v]}
-            </button>
+              <button
+                role="tab"
+                aria-selected={view === v}
+                onClick={() => open(v)}
+              >
+                <span aria-hidden="true">{icons[v]}</span> {names[v]}
+              </button>
+              {tabs.length > 1 && (
+                <button
+                  className={styles.tabClose}
+                  aria-label={`Close ${names[v]} tab`}
+                  title="Close tab"
+                  onClick={() => closeTab(v)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
           ))}
-          <button aria-label="Open task board" onClick={() => setView("board")}>
-            ＋
-          </button>
+          {unopened.length > 0 && (
+            <Menu
+              label="Open another view"
+              className={styles.tabAdd}
+              align="start"
+              items={unopened.map((v) => ({
+                label: (
+                  <>
+                    <span aria-hidden="true">{icons[v]}</span> {names[v]}
+                  </>
+                ),
+                onSelect: () => open(v),
+              }))}
+            >
+              ＋
+            </Menu>
+          )}
         </div>
         {storageError && (
           <div className={styles.warning} role="alert">
@@ -1106,6 +1779,7 @@ export default function Workspace() {
           <div className={styles.notice} role="status">
             {notice}
             <button
+              className={styles.iconButton}
               aria-label="Dismiss notification"
               onClick={() => setNotice("")}
             >
@@ -1114,7 +1788,7 @@ export default function Workspace() {
           </div>
         )}
         <div
-          className={`${styles.panes} ${split && split !== view ? styles.split : ""}`}
+          className={`${styles.panes} ${paneTask || sideView ? styles.split : ""}`}
         >
           <div
             className={`${styles.pane} ${view === "canvas" ? styles.canvasPane : ""}`}
@@ -1122,28 +1796,35 @@ export default function Workspace() {
             {ready ? (
               render(view)
             ) : (
-              <div className={styles.empty}>
+              <div className={`${styles.empty} ${styles.loading}`}>
                 {storageError
                   ? "Workspace recovery needed."
                   : "Opening workspace…"}
               </div>
             )}
           </div>
-          {ready && split && split !== view && (
+          {ready && paneTask && (
+            <div className={styles.pane} aria-label="Ticket">
+              {ticket(paneTask, () => setSplitTask(null), true)}
+            </div>
+          )}
+          {ready && sideView && (
             <div
-              className={`${styles.pane} ${split === "canvas" ? styles.canvasPane : ""}`}
+              className={`${styles.pane} ${sideView === "canvas" ? styles.canvasPane : ""}`}
             >
-              {render(split)}
+              {render(sideView)}
             </div>
           )}
         </div>
         <footer className={styles.statusbar}>
           <span>
-            <span className={styles.onlineDot} />
+            <span
+              className={`${styles.onlineDot} ${storageError || sync === "error" ? styles.offlineDot : ""}`}
+            />
             {storageError
               ? "Storage needs attention"
               : ready
-                ? "Autosave enabled · local workspace"
+                ? syncText[sync]
                 : "Loading"}
           </span>
           <span>
@@ -1164,15 +1845,20 @@ export default function Workspace() {
         <div className={styles.popupTitlebar}>
           <h2 id="workspace-terminal-title">&gt;_ Workspace terminal</h2>
           <button
+            className={styles.iconButton}
             aria-label="Close workspace terminal"
             onClick={() => setTerminalOpen(false)}
           >
             ×
           </button>
         </div>
-        {terminal(true)}
+        <div className={styles.popupBody}>
+          {sidebar(true)}
+          {terminal(true)}
+        </div>
         <div className={styles.popupHint}>
-          help · ↑↓ history · Ctrl+L clear · Ctrl+C cancel · Esc / Ctrl+Y close
+          Tab complete · → accept suggestion · ↑↓ history · Ctrl+L clear ·
+          Ctrl+C cancel · Esc / Ctrl+Y close
         </div>
       </dialog>
       <dialog
@@ -1183,141 +1869,7 @@ export default function Workspace() {
           if (e.target === e.currentTarget) setSelected(null)
         }}
       >
-        {task && (
-          <div>
-            <button
-              onClick={() => {
-                change(
-                  (w) => deleteTask(w, task.id),
-                  "Task deleted. Restore its checkpoint in History to undo."
-                )
-                setSelected(null)
-              }}
-            >
-              Delete task
-            </button>
-            <div className={styles.viewTitle}>
-              <code title={task.id}>{task.id}</code>
-              <button
-                aria-label="Close task details"
-                onClick={() => setSelected(null)}
-              >
-                ×
-              </button>
-            </div>
-            <label className={styles.field}>
-              Title
-              <input
-                value={task.title}
-                onChange={(e) =>
-                  change((w) =>
-                    updateTask(w, task.id, { title: e.target.value })
-                  )
-                }
-              />
-            </label>
-            <label className={styles.colorLabel}>
-              <input
-                type="checkbox"
-                checked={task.done}
-                onChange={(e) =>
-                  change((w) =>
-                    updateTask(w, task.id, { done: e.target.checked })
-                  )
-                }
-              />
-              Completed
-            </label>
-            <div className={styles.toolbar}>
-              <label className={styles.field}>
-                Column
-                <select
-                  value={task.column}
-                  onChange={(e) =>
-                    change((w) =>
-                      updateTask(w, task.id, { column: e.target.value })
-                    )
-                  }
-                >
-                  {w.columns.map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </select>
-              </label>
-              <label className={styles.field}>
-                Submission
-                <select
-                  value={task.submission}
-                  onChange={(e) =>
-                    change((w) =>
-                      updateTask(w, task.id, {
-                        submission: e.target.value as Task["submission"],
-                      })
-                    )
-                  }
-                >
-                  <option value="none">Not applicable</option>
-                  <option value="pending">Not submitted</option>
-                  <option value="submitted">Submitted</option>
-                </select>
-              </label>
-            </div>
-            <h2>Labels</h2>
-            <div className={styles.badges}>
-              {w.labels.map((l) => (
-                <label key={l.id} style={{ color: l.color }}>
-                  <input
-                    type="checkbox"
-                    checked={task.labels.includes(l.id)}
-                    onChange={(e) =>
-                      change((w) =>
-                        updateTask(w, task.id, {
-                          labels: e.target.checked
-                            ? [...task.labels, l.id]
-                            : task.labels.filter((id) => id !== l.id),
-                        })
-                      )
-                    }
-                  />{" "}
-                  {l.name}
-                </label>
-              ))}
-            </div>
-            {!w.labels.length && (
-              <p className={styles.hint}>
-                Create labels in Customize or with label new.
-              </p>
-            )}
-            <h2>Comments</h2>
-            {task.comments.map((c, i) => (
-              <p className={styles.comment} key={i}>
-                {c}
-              </p>
-            ))}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                const text = formText(e, "comment")
-                if (text) {
-                  change((w) =>
-                    updateTask(w, task.id, {
-                      comments: [...task.comments, text],
-                    })
-                  )
-                  e.currentTarget.reset()
-                }
-              }}
-            >
-              <textarea
-                name="comment"
-                required
-                aria-label="Comment"
-                placeholder="Add context or a note…"
-              />
-              <button>Add comment</button>
-            </form>
-          </div>
-        )}
+        {task && ticket(task, () => setSelected(null))}
       </dialog>
     </main>
   )

@@ -1,16 +1,38 @@
 "use client"
 
-import { useEffect, useRef, useState, type PointerEvent, type Dispatch, type SetStateAction } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+  type Dispatch,
+  type SetStateAction,
+} from "react"
 import type { Stroke, WhiteboardObject, Task } from "@/lib/alpha"
-import { resolveArrow, connectionPoint, type Connection } from "@/lib/alpha"
+import { resolveArrow, objectAt, PEN_WIDTHS } from "@/lib/alpha"
 import BoardObject from "./BoardObject"
-import BoardIcon from "./BoardIcon"
+import BoardIcon, { type BoardIconName } from "./BoardIcon"
 import styles from "./whiteboard.module.css"
+
+const CREATE: [WhiteboardObject["kind"], string, string][] = [
+  ["sticky", "Sticky", "Add a sticky note"],
+  ["text", "Text", "Add free text"],
+  ["document", "Document", "Add a document"],
+  ["kanban", "Kanban", "Add the task board"],
+  ["arrow", "Arrow", "Add an arrow. Drop its ends on items to connect them"],
+  ["link", "Ticket", "Add a ticket link. Clicking it opens the ticket beside the canvas"],
+]
 
 export default function Whiteboard({
   strokes,
   notes,
   color,
+  palette,
+  penWidth,
+  onPen,
+  onPaletteAdd,
+  onPaletteRemove,
   onStroke,
   onUndo,
   onNotes,
@@ -23,11 +45,22 @@ export default function Whiteboard({
   onObjectAdd,
   onBoardTask,
   onTaskChange,
-  camera, setCamera, onSize, onConnect,
+  onLinkTicket,
+  onOpenTask,
+  camera,
+  setCamera,
+  onSize,
 }: {
   strokes: Stroke[]
   notes: string
+  /** Current pen color. */
   color: string
+  /** Saved pen colors. */
+  palette: string[]
+  penWidth: number
+  onPen: (pen: { color?: string; width?: number }) => void
+  onPaletteAdd: (color: string) => void
+  onPaletteRemove: (color: string) => void
   onStroke: (stroke: Stroke) => void
   onUndo: () => void
   onNotes: (notes: string) => void
@@ -40,21 +73,24 @@ export default function Whiteboard({
   onObjectAdd: (kind: WhiteboardObject["kind"]) => void
   onBoardTask: (title: string, column: string) => void
   onTaskChange: (id: string, patch: Partial<Task>) => void
+  onLinkTicket: (objectId: string) => void
+  onOpenTask: (id: string) => void
   camera: { x: number; y: number; zoom: number }
   setCamera: Dispatch<SetStateAction<{ x: number; y: number; zoom: number }>>
   onSize: (size: { width: number; height: number }) => void
-  onConnect: (from: Connection, to: Connection) => void
 }) {
   const [tool, setTool] = useState<"pen" | "hand">("pen")
-  const [ink, setInk] = useState(color)
-  const [connection, setConnection] = useState<Connection | null>(null)
+  const [connectTarget, setConnectTarget] = useState<string | null>(null)
   const [draft, setDraft] = useState<[number, number][]>([])
   const [notesOpen, setNotesOpen] = useState(false)
   const [selection, setSelection] = useState("")
   const svg = useRef<SVGSVGElement>(null)
   useEffect(() => {
     if (!svg.current) return
-    const observer = new ResizeObserver(entries => { const { width, height } = entries[0].contentRect; onSize({ width, height }) })
+    const observer = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect
+      onSize({ width, height })
+    })
     observer.observe(svg.current)
     return () => observer.disconnect()
   }, [onSize])
@@ -147,16 +183,34 @@ export default function Whiteboard({
       0.1,
       Math.min(
         4,
-        (rect.width - 140) / Math.max(1, right - left),
-        (rect.height - 160) / Math.max(1, bottom - top)
+        // Leave room for the tool rail on the left and the pen bar on top.
+        (rect.width - 300) / Math.max(1, right - left),
+        (rect.height - 180) / Math.max(1, bottom - top)
       )
     )
     setCamera({
       zoom,
-      x: rect.width / 2 - ((left + right) / 2) * zoom,
-      y: rect.height / 2 - ((top + bottom) / 2) * zoom,
+      x: rect.width / 2 + 55 - ((left + right) / 2) * zoom,
+      y: rect.height / 2 + 20 - ((top + bottom) / 2) * zoom,
     })
   }
+
+  const saved = palette.includes(color.toLowerCase())
+  const target = objects.find((o) => o.id === connectTarget)
+  const toolButton = (
+    name: "pen" | "hand",
+    icon: BoardIconName,
+    label: string,
+    title: string
+  ) => (
+    <button
+      aria-pressed={tool === name}
+      onClick={() => setTool(name)}
+      title={title}
+    >
+      <BoardIcon name={icon} /> <span>{label}</span>
+    </button>
+  )
 
   return (
     <section className={styles.whiteboard} aria-label="Whiteboard">
@@ -205,7 +259,12 @@ export default function Whiteboard({
           if (!g || g.pointer !== e.pointerId) return
           if (g.kind === "pen") {
             g.points.push(point(e))
-            onStroke({ id: crypto.randomUUID(), color: ink, points: g.points })
+            onStroke({
+              id: crypto.randomUUID(),
+              color,
+              width: penWidth,
+              points: g.points,
+            })
           }
           gesture.current = null
           setDraft([])
@@ -224,7 +283,7 @@ export default function Whiteboard({
               points={s.points.map((p) => p.join(",")).join(" ")}
               fill="none"
               stroke={s.color}
-              strokeWidth="3"
+              strokeWidth={s.width ?? 3}
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -232,8 +291,8 @@ export default function Whiteboard({
           <polyline
             points={draft.map((p) => p.join(",")).join(" ")}
             fill="none"
-            stroke={ink}
-            strokeWidth="3"
+            stroke={color}
+            strokeWidth={penWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -248,66 +307,36 @@ export default function Whiteboard({
               onDelete={() => onObjectDelete(item.id)}
               onTask={onBoardTask}
               onTaskChange={onTaskChange}
+              findTarget={(at, exclude) =>
+                objectAt(objects, at, exclude, 12 / camera.zoom)
+              }
+              onConnectHover={setConnectTarget}
+              onLinkTicket={() => onLinkTicket(item.id)}
+              onOpenTask={onOpenTask}
             />
           ))}
-          {objects.filter(o => o.kind !== "arrow").flatMap(o => (["top", "right", "bottom", "left"] as const).map(side => {
-            const p = connectionPoint(o, side)
-            const choose = () => {
-              const next = { objectId: o.id, side }
-              if (!connection) setConnection(next)
-              else { if (connection.objectId !== o.id) onConnect(connection, next); setConnection(null) }
-            }
-            return <circle key={`${o.id}-${side}`} cx={p.x} cy={p.y} r={5 / camera.zoom} fill={connection?.objectId === o.id && connection.side === side ? "var(--primary)" : "var(--background)"} stroke="var(--primary)" strokeWidth={1.5 / camera.zoom} tabIndex={0} role="button" aria-label={`Connect ${o.kind} ${side}`} style={{ cursor: "crosshair" }} onPointerDown={e => e.stopPropagation()} onClick={choose} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose() } if (e.key === "Escape") setConnection(null) }} />
-          }))}
+          {target && (
+            // Shown only while an arrow end is dragged over an item.
+            <rect
+              className={styles.connectTarget}
+              x={target.x - 6 / camera.zoom}
+              y={target.y - 6 / camera.zoom}
+              width={target.width + 12 / camera.zoom}
+              height={target.height + 12 / camera.zoom}
+              strokeWidth={2 / camera.zoom}
+              strokeDasharray={`${6 / camera.zoom} ${4 / camera.zoom}`}
+            />
+          )}
         </g>
       </svg>
-      <div className={`${styles.hud} ${styles.title}`}>
-        <strong>Whiteboard</strong>
-        <span>Personal canvas</span>
-        <select
-          aria-label="Add whiteboard object"
-          value=""
-          onChange={(e) =>
-            onObjectAdd(e.target.value as WhiteboardObject["kind"])
-          }
-        >
-          <option value="" disabled>
-            + Add
-          </option>
-          <option value="sticky">Sticky note</option>
-          <option value="kanban">Kanban</option>
-          <option value="arrow">Arrow</option>
-          <option value="document">Document</option>
-        </select>
-      </div>
-      {connection && <div className={styles.connectionHint}>Click a dot on another item to connect.<button onClick={() => setConnection(null)}>Cancel</button></div>}
       <div
         className={`${styles.hud} ${styles.tools}`}
         role="toolbar"
         aria-label="Whiteboard tools"
+        aria-orientation="vertical"
       >
-        <button
-          aria-pressed={tool === "pen"}
-          onClick={() => setTool("pen")}
-          title="Draw with the pen"
-        >
-          <BoardIcon name="pen" /> <span>Pen</span>
-        </button>
-        <button
-          aria-pressed={tool === "hand"}
-          onClick={() => setTool("hand")}
-          title="Drag to move around the whiteboard"
-        >
-          <BoardIcon name="hand" /> <span>Pan</span>
-        </button>
-        <label className={styles.ink} title="Pen color">
-          <input
-            aria-label="Pen color"
-            type="color"
-            value={ink}
-            onChange={(e) => setInk(e.target.value)}
-          />
-        </label>
+        {toolButton("pen", "pen", "Pen", "Draw with the pen")}
+        {toolButton("hand", "hand", "Pan", "Drag to move around the whiteboard")}
         <button
           disabled={!strokes.length}
           onClick={onUndo}
@@ -318,31 +347,88 @@ export default function Whiteboard({
         <button
           aria-expanded={notesOpen}
           onClick={() => setNotesOpen(!notesOpen)}
+          title="Canvas notes"
         >
           <BoardIcon name="document" /> <span>Notes</span>
         </button>
         <div className={styles.toolDivider} />
-        <span className={styles.toolCaption}>CREATE</span>
-        {(["sticky", "kanban", "arrow", "document"] as const).map((kind) => (
+        <span className={styles.toolCaption}>ADD</span>
+        {CREATE.map(([kind, label, title]) => (
           <button
             key={kind}
-            title={`Add ${kind === "sticky" ? "sticky note" : kind}`}
-            aria-label={`Add ${kind}`}
+            title={title}
+            aria-label={title}
             onClick={() => onObjectAdd(kind)}
           >
             <BoardIcon name={kind} />
-            <span>
-              {kind === "sticky"
-                ? "Sticky"
-                : kind === "kanban"
-                  ? "Kanban"
-                  : kind === "arrow"
-                    ? "Arrow"
-                    : "Document"}
-            </span>
+            <span>{label}</span>
           </button>
         ))}
       </div>
+      {tool === "pen" && (
+        <div
+          className={`${styles.hud} ${styles.pen}`}
+          role="toolbar"
+          aria-label="Pen color and thickness"
+        >
+          <div className={styles.swatches} role="group" aria-label="Saved colors">
+            {palette.map((c) => (
+              <button
+                key={c}
+                title={`Use ${c}`}
+                aria-label={`Pen color ${c}`}
+                aria-pressed={c === color.toLowerCase()}
+                style={{ "--swatch": c } as CSSProperties}
+                onClick={() => onPen({ color: c })}
+              />
+            ))}
+            <input
+              type="color"
+              title="Pick any color"
+              aria-label="Pick a pen color"
+              value={color}
+              onChange={(e) => onPen({ color: e.target.value })}
+            />
+          </div>
+          <button
+            className={styles.penAction}
+            title={
+              saved
+                ? "Remove this color from your saved colors"
+                : "Save this color to your palette"
+            }
+            onClick={() =>
+              saved ? onPaletteRemove(color) : onPaletteAdd(color)
+            }
+          >
+            {saved ? "− Remove" : "+ Save"}
+          </button>
+          <div className={styles.penDivider} />
+          <div
+            className={styles.widths}
+            role="group"
+            aria-label="Pen thickness"
+          >
+            {PEN_WIDTHS.map((width) => (
+              <button
+                key={width}
+                title={`${width} px`}
+                aria-label={`Pen thickness ${width} pixels`}
+                aria-pressed={penWidth === width}
+                onClick={() => onPen({ width })}
+              >
+                <span
+                  style={{
+                    width: Math.min(width + 2, 16),
+                    height: Math.min(width + 2, 16),
+                    background: color,
+                  }}
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {notesOpen && (
         <aside
           className={`${styles.hud} ${styles.notes}`}
@@ -354,7 +440,7 @@ export default function Whiteboard({
               aria-label="Close notes"
               onClick={() => setNotesOpen(false)}
             >
-              ×
+              <BoardIcon name="close" size={14} />
             </button>
           </div>
           <textarea
@@ -402,7 +488,12 @@ export default function Whiteboard({
         <button onClick={fit}>Fit</button>
       </div>
       <div className={styles.hint}>
-        {tool === "pen" ? "Drag to draw" : "Drag to pan"} · Ctrl+Y terminal
+        {connectTarget
+          ? "Release to connect"
+          : tool === "pen"
+            ? "Drag to draw"
+            : "Drag to pan"}{" "}
+        · Drop an arrow end on an item to connect · Ctrl+Y terminal
       </div>
     </section>
   )

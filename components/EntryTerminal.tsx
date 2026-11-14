@@ -1,6 +1,12 @@
 "use client"
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react"
 import { useRouter } from "next/navigation"
 import {
   Dialog,
@@ -10,7 +16,16 @@ import {
 } from "@/components/ui/dialog"
 import { useAuthenticate } from "@/hooks/use-authenticate"
 import { ENTRY_COMMANDS, parseEntryCommand } from "@/lib/entry-terminal"
+import { Commands } from "@/contexts/TerminalContext/commands"
+import { useCompletion } from "@/hooks/use-completion"
+import type { CompletionCommand } from "@/lib/completion"
 import styles from "./entry-terminal.module.css"
+
+const SHELL_COMMANDS: [string, string][] = [
+  ["menu", "Show selectable actions"],
+  ["clear", "Clear the output"],
+  ["exit", "Close this terminal"],
+]
 
 export default function EntryTerminal({
   close,
@@ -49,6 +64,24 @@ export default function EntryTerminal({
       (!user || !["login", "register"].includes(c.command))
   )
   const active = Math.min(selected, options.length - 1)
+  // What Tab can complete: the command registry (including "auth" and its
+  // subcommands) plus the actions available to this session.
+  const signedIn = !!user
+  const registry = useMemo(() => {
+    const commands: Record<string, CompletionCommand> = { ...Commands }
+    for (const option of ENTRY_COMMANDS)
+      if (
+        (!option.signedIn || signedIn) &&
+        (!signedIn || !["login", "register"].includes(option.command))
+      )
+        commands[option.command] ??= {
+          name: option.command,
+          usage: option.title,
+        }
+    for (const [name, usage] of SHELL_COMMANDS) commands[name] ??= { name, usage }
+    return commands
+  }, [signedIn])
+  const completion = useCompletion(input, setInput, registry, undefined, !busy)
   const write = (text: string) =>
     setOutput((prev) => [...prev, text].slice(-80))
 
@@ -91,7 +124,7 @@ export default function EntryTerminal({
     }
     if (command === "help") {
       write(
-        "login / register   Sign in or create an account here\nworkspace          Open the local alpha\ndashboard          Open your account board\nsettings / logout  Account actions\nmenu               Show selectable actions\nclear (cls)        Clear the output\nexit               Close this terminal\n\n↑/↓ select actions · Enter runs · Tab completes a command\nAlt+↑/↓ recall history · Ctrl+L clears · Ctrl+C cancels\nEsc or Ctrl+Y closes. This prompt runs Iterations commands."
+        "login / register   Sign in or create an account here\nworkspace          Open the local alpha\ndashboard          Open your account board\nsettings / logout  Account actions\nmenu               Show selectable actions\nclear (cls)        Clear the output\nexit               Close this terminal\n\n↑/↓ select actions · Enter runs · Tab completes (again to cycle) · → accepts the suggestion\nAlt+↑/↓ recall history · Ctrl+L clears · Ctrl+C cancels\nEsc or Ctrl+Y closes. This prompt runs Iterations commands."
       )
       return
     }
@@ -210,6 +243,7 @@ export default function EntryTerminal({
     write("^C  Cancelled.")
   }
   function keys(e: KeyboardEvent<HTMLInputElement>) {
+    if (completion.onKeyDown(e)) return
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault()
       const delta = e.key === "ArrowUp" ? -1 : 1
@@ -220,18 +254,6 @@ export default function EntryTerminal({
         )
         setInput(history[position.current] ?? "")
       } else setSelected((active + delta + options.length) % options.length)
-    }
-    if (e.key === "Tab" && input && !e.shiftKey) {
-      const matches = [
-        ...options.map((o) => o.command),
-        "menu",
-        "clear",
-        "exit",
-      ].filter((c) => c.startsWith(input.toLowerCase()))
-      if (matches.length) {
-        e.preventDefault()
-        setInput(matches[0])
-      }
     }
   }
 
@@ -389,6 +411,31 @@ export default function EntryTerminal({
             </form>
           )}
         </div>
+        {!mode && completion.candidates.length > 0 && (
+          <div
+            className={styles.suggestions}
+            role="listbox"
+            aria-label="Completions"
+          >
+            {completion.candidates.slice(0, 6).map((c, i) => (
+              <button
+                type="button"
+                role="option"
+                key={c.value}
+                aria-selected={i === completion.active}
+                tabIndex={-1}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  completion.accept(c.value)
+                  prompt.current?.focus()
+                }}
+              >
+                <b>{c.value}</b>
+                {c.description && <span>{c.description}</span>}
+              </button>
+            ))}
+          </div>
+        )}
         {!mode && (
           <form
             className={styles.prompt}
@@ -399,7 +446,12 @@ export default function EntryTerminal({
             }}
           >
             <label htmlFor="entry-command">PS iterations:\&gt;</label>
-            <input
+            <div className={styles.field}>
+              <div className={styles.ghost} aria-hidden="true">
+                <span>{input}</span>
+                {completion.suggestion}
+              </div>
+              <input
               ref={prompt}
               id="entry-command"
               aria-label="Terminal command"
@@ -417,6 +469,7 @@ export default function EntryTerminal({
                     : "Type a command…"
               }
             />
+            </div>
             <button disabled={busy} aria-label="Run command">
               ↵
             </button>
@@ -426,7 +479,7 @@ export default function EntryTerminal({
           <span>
             {user ? `Signed in as ${user.username}` : "Guest session"}
           </span>
-          <span>↑↓ select · Tab complete · Ctrl+Y close</span>
+          <span>↑↓ select · Tab complete · → accept · Ctrl+Y close</span>
         </footer>
       </DialogContent>
     </Dialog>

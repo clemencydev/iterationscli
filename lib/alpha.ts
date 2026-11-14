@@ -16,20 +16,53 @@ export type Label = {
   color: string
   scope: "global" | "local"
 }
-export type Stroke = { id: string; points: [number, number][]; color: string }
+export type Stroke = {
+  id: string
+  points: [number, number][]
+  color: string
+  /** Pen thickness in canvas units. Older strokes have none and render at 3. */
+  width?: number
+}
+export const PEN_WIDTHS = [2, 3, 5, 8, 14]
+export const DEFAULT_PALETTE = ["#e5e5e5", "#f87171", "#fbbf24", "#4ade80", "#60a5fa", "#c084fc"]
+export const STICKY_COLORS = ["#e4b93d", "#f08a7b", "#7fc98b", "#6fb1e8", "#b99cf0", "#9aa0a6"]
+export const TEXT_SIZES = [14, 18, 24, 36, 56]
+export const isHexColor = (value: unknown): value is string =>
+  typeof value === "string" && /^#[\da-f]{6}$/i.test(value)
 export type WhiteboardObject = {
   html?: string
   from?: Connection
   to?: Connection
   locked?: boolean
   id: string
-  kind: "sticky" | "kanban" | "arrow" | "document"
+  kind: WhiteboardKind
+  /** Sticky tint or free-text color (hex). */
+  color?: string
+  /** Free-text size in px. */
+  fontSize?: number
+  /** Ticket a link node points at. */
+  taskId?: string
   x: number
   y: number
   width: number
   height: number
   text: string
 }
+export type WhiteboardKind =
+  | "sticky"
+  | "kanban"
+  | "arrow"
+  | "document"
+  | "text"
+  | "link"
+export const WHITEBOARD_KINDS: WhiteboardKind[] = [
+  "sticky",
+  "kanban",
+  "arrow",
+  "document",
+  "text",
+  "link",
+]
 export type Connection = { objectId: string; side: "top" | "right" | "bottom" | "left" }
 export function connectionPoint(object: WhiteboardObject, side: Connection["side"]) {
   return { x: object.x + (side === "left" ? 0 : side === "right" ? object.width : object.width / 2), y: object.y + (side === "top" ? 0 : side === "bottom" ? object.height : object.height / 2) }
@@ -45,9 +78,116 @@ export function resolveArrow(item: WhiteboardObject, objects: WhiteboardObject[]
 export function connectObjects(w: Workspace, from: Connection, to: Connection): Workspace {
   const source = w.objects.find(o => o.id === from.objectId && o.kind !== "arrow")
   const target = w.objects.find(o => o.id === to.objectId && o.kind !== "arrow")
-  if (!source || !target || source.id === target.id) throw new Error("Choose connection dots on two different items.")
+  if (!source || !target || source.id === target.id) throw new Error("Connect two different items.")
   const start = connectionPoint(source, from.side), end = connectionPoint(target, to.side)
   return { ...w, objects: [...w.objects, { id: uid(), kind: "arrow", text: "", x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y, from, to }] }
+}
+/** Side of `object` closest to a point; used when an arrow end is dropped on an item. */
+export function nearestSide(object: WhiteboardObject, point: { x: number; y: number }): Connection["side"] {
+  const sides = ["top", "right", "bottom", "left"] as const
+  let best: Connection["side"] = "top", distance = Infinity
+  for (const side of sides) {
+    const p = connectionPoint(object, side)
+    const d = (p.x - point.x) ** 2 + (p.y - point.y) ** 2
+    if (d < distance) { distance = d; best = side }
+  }
+  return best
+}
+/** Topmost connectable item under a point (arrows never accept connections). */
+export function objectAt(objects: WhiteboardObject[], point: { x: number; y: number }, exclude?: string, margin = 12): WhiteboardObject | undefined {
+  for (let i = objects.length - 1; i >= 0; i--) {
+    const o = objects[i]
+    if (o.kind === "arrow" || o.id === exclude) continue
+    if (point.x >= o.x - margin && point.x <= o.x + o.width + margin && point.y >= o.y - margin && point.y <= o.y + o.height + margin) return o
+  }
+}
+/** Sides that face each other, so a new arrow takes the short way between two items. */
+export function facingSides(a: WhiteboardObject, b: WhiteboardObject): [Connection["side"], Connection["side"]] {
+  const dx = b.x + b.width / 2 - (a.x + a.width / 2), dy = b.y + b.height / 2 - (a.y + a.height / 2)
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? ["right", "left"] : ["left", "right"]
+  return dy >= 0 ? ["bottom", "top"] : ["top", "bottom"]
+}
+/** Adds a ticket link node beside an item and connects the two with an arrow. */
+export function linkObjectToTask(w: Workspace, objectId: string, taskId?: string): Workspace {
+  const source = w.objects.find(o => o.id === objectId && o.kind !== "arrow")
+  if (!source) throw new Error("Whiteboard item not found.")
+  if (taskId !== undefined && !w.tasks.some(t => t.id === taskId)) throw new Error("Task not found.")
+  const node: WhiteboardObject = { id: uid(), kind: "link", text: "", taskId, x: source.x + source.width + 90, y: source.y + source.height / 2 - 48, width: 240, height: 96 }
+  const next = { ...w, objects: [...w.objects, node] }
+  return connectObjects(next, { objectId: source.id, side: "right" }, { objectId: node.id, side: "left" })
+}
+export function renameColumn(w: Workspace, from: string, to: string): Workspace {
+  const name = to.trim()
+  if (!w.columns.includes(from)) throw new Error("Column not found.")
+  if (!name) throw new Error("A column needs a name.")
+  if (name === from) return w
+  if (w.columns.includes(name)) throw new Error("A column with that name already exists.")
+  return {
+    ...w,
+    columns: w.columns.map(c => (c === from ? name : c)),
+    tasks: w.tasks.map(t => (t.column === from ? { ...t, column: name } : t)),
+  }
+}
+export function addColumn(w: Workspace, raw: string): Workspace {
+  const name = raw.trim()
+  if (!name || w.columns.includes(name)) throw new Error("Choose a new, nonempty column name.")
+  return { ...w, columns: [...w.columns, name] }
+}
+export function setLabelColor(w: Workspace, id: string, color: string): Workspace {
+  if (!isHexColor(color)) throw new Error("Use a hex color such as #ff8800.")
+  if (!w.labels.some(l => l.id === id)) throw new Error("Label not found.")
+  return { ...w, labels: w.labels.map(l => (l.id === id ? { ...l, color: color.toLowerCase() } : l)) }
+}
+export function deleteLabel(w: Workspace, id: string): Workspace {
+  if (!w.labels.some(l => l.id === id)) throw new Error("Label not found.")
+  return {
+    ...w,
+    labels: w.labels.filter(l => l.id !== id),
+    tasks: w.tasks.map(t => (t.labels.includes(id) ? { ...t, labels: t.labels.filter(l => l !== id) } : t)),
+  }
+}
+/** Saved pen colors: unique, lower-case hex, most recent last, capped. */
+export function addPaletteColor(w: Workspace, color: string): Workspace {
+  if (!isHexColor(color)) throw new Error("Use a hex color such as #ff8800.")
+  const value = color.toLowerCase()
+  const palette = w.palette ?? DEFAULT_PALETTE
+  if (palette.includes(value)) return w
+  return { ...w, palette: [...palette, value].slice(-24) }
+}
+export function removePaletteColor(w: Workspace, color: string): Workspace {
+  return { ...w, palette: (w.palette ?? DEFAULT_PALETTE).filter(c => c !== color.toLowerCase()) }
+}
+export type FontChoice = {
+  /** CSS family name. */
+  family: string
+  source: "google" | "file"
+  /** Stylesheet URL for Google fonts. */
+  href?: string
+}
+/** Fills in fields added after a workspace was first saved, without touching user data. */
+export function normalizeWorkspace(saved: Workspace): Workspace {
+  return {
+    ...saved,
+    objects: saved.objects ?? [],
+    palette: Array.isArray(saved.palette) ? saved.palette.filter(isHexColor) : [...DEFAULT_PALETTE],
+    penWidth: typeof saved.penWidth === "number" ? saved.penWidth : 3,
+    penColor: isHexColor(saved.penColor) ? saved.penColor : undefined,
+  }
+}
+export function isWorkspace(value: unknown): value is Workspace {
+  const saved = value as Workspace | null
+  return (
+    !!saved &&
+    typeof saved === "object" &&
+    saved.schema === 1 &&
+    Array.isArray(saved.tasks) &&
+    Array.isArray(saved.commits) &&
+    Array.isArray(saved.columns) &&
+    Array.isArray(saved.labels) &&
+    Array.isArray(saved.strokes) &&
+    Array.isArray(saved.proposals) &&
+    Array.isArray(saved.merged)
+  )
 }
 export type Snapshot = {
   tasks: Task[]
@@ -78,6 +218,12 @@ export type Workspace = Snapshot & {
   accent: string
   theme: string
   scanlines: boolean
+  /** Saved pen colors for the whiteboard. */
+  palette?: string[]
+  penWidth?: number
+  penColor?: string
+  /** ISO time of the last change; used to pick the newer copy when syncing. */
+  updated?: string
 }
 export const uid = () => crypto.randomUUID()
 export function initialWorkspace(): Workspace {
@@ -95,6 +241,8 @@ export function initialWorkspace(): Workspace {
     accent: "#777777",
     theme: "original",
     scanlines: false,
+    palette: [...DEFAULT_PALETTE],
+    penWidth: 3,
   }
 }
 export function snapshot(w: Workspace): Snapshot {
@@ -166,17 +314,29 @@ export function addWhiteboardObject(
     text,
     x: 160 + (index % 3) * 290,
     y: 110 + Math.floor(index / 3) * 280,
-    width: kind === "kanban" ? 720 : kind === "document" ? 380 : 240,
+    width:
+      kind === "kanban" ? 720 : kind === "document" ? 420 : kind === "text" ? 280 : 240,
     height:
       kind === "kanban"
         ? 420
         : kind === "document"
-          ? 440
+          ? 460
           : kind === "arrow"
             ? 100
-            : 220,
+            : kind === "text"
+              ? 90
+              : kind === "link"
+                ? 96
+                : 220,
   }
-  if (center) { item.x = center.x - item.width / 2; item.y = center.y - item.height / 2 }
+  if (kind === "sticky") item.color = STICKY_COLORS[0]
+  if (kind === "text") item.fontSize = 18
+  if (center) {
+    // Cascade successive items so a new one never hides exactly behind the last.
+    const step = (index % 6) * 28
+    item.x = center.x - item.width / 2 + step
+    item.y = center.y - item.height / 2 + step
+  }
   return { ...w, objects: [...(w.objects ?? []), item] }
 }
 export function deleteTask(w: Workspace, id: string): Workspace {
@@ -281,7 +441,7 @@ export function parseProposals(raw: string, w: Workspace): Proposal[] {
     }
   })
 }
-export const HELP = `wb add sticky|kanban|arrow|document "Optional text"\ntask new "Your task"\ntask list\ntask done <id> | task reopen <id>\ntask move <id> "Column"\ntask submit <id>\ntask delete <id>\ncolumn delete "Column" (moves tasks to first remaining column)\ncolumn new "Column"\nlabel new "Name" global|local\nlabel add <task-id> "Name"\ntab terminal|board|canvas|stats|inbox|history|settings\nsplit board|canvas|stats|terminal | split off\ntheme original|phosphor|amber|violet\ncheckpoint "Description"\nrevert <checkpoint-id>  (asks Y/N)\nmerge <proposal-id>  (asks Y/N)\nclear | help\nUse quoted names with spaces. IDs can be unique prefixes. ↑/↓ recalls commands.`
+export const HELP = `wb add sticky|kanban|arrow|document|text "Optional text"\nwb add link <task-id>  (ticket node; click it to open the ticket in a split)\ntask new "Your task"\ntask list\ntask done <id> | task reopen <id>\ntask move <id> "Column"\ntask submit <id>\ntask delete <id>\ncolumn delete "Column" (moves tasks to first remaining column)\ncolumn new "Column"\ncolumn rename "Column" "New name"\nlabel new "Name" global|local [#hex]\nlabel color "Name" #hex\nlabel add <task-id> "Name"\ntab terminal|board|canvas|stats|inbox|history|settings\nsplit board|canvas|stats|terminal | split off\ntheme original|phosphor|amber|violet\ncheckpoint "Description"\nrevert <checkpoint-id>  (asks Y/N)\nmerge <proposal-id>  (asks Y/N)\nclear | help\nUse quoted names with spaces. IDs can be unique prefixes.\nTab completes · → accepts the suggestion · ↑/↓ recalls commands.`
 export type View =
   | "terminal"
   | "board"
@@ -341,11 +501,32 @@ export function execute(w: Workspace, input: string, center?: { x: number; y: nu
       arrow: "arrow",
       document: "document",
       doc: "document",
+      text: "text",
+      link: "link",
+      ticket: "link",
     }
     if (!Object.hasOwn(aliases, args[0]))
       throw new Error(
-        'Use wb add sticky|kanban|arrow|document "Optional text".'
+        'Use wb add sticky|kanban|arrow|document|text "Optional text", or wb add link <task-id>.'
       )
+    if (aliases[args[0]] === "link") {
+      const task = args[1] ? resolve(w.tasks, args[1]) : undefined
+      const added = addWhiteboardObject(w, "link", "", center)
+      return {
+        ...result(
+          {
+            ...added,
+            objects: added.objects.map((o, i) =>
+              i === added.objects.length - 1 ? { ...o, taskId: task?.id } : o
+            ),
+          },
+          task
+            ? `Linked "${task.title}" on the whiteboard. Click the node to open the ticket beside the canvas.`
+            : "Added a ticket link. Pick its ticket on the node."
+        ),
+        view: "canvas",
+      }
+    }
     const next = addWhiteboardObject(
       w,
       aliases[args[0]],
@@ -354,7 +535,7 @@ export function execute(w: Workspace, input: string, center?: { x: number; y: nu
     return {
       ...result(
         next,
-        `Added ${aliases[args[0]]} to the whiteboard. Drag its header to move it; drag arrow endpoints to extend it. Use Fit to see everything.`
+        `Added ${aliases[args[0]]} to the whiteboard. Drag its header to move it; drop an arrow end on an item to connect. Use Fit to see everything.`
       ),
       view: "canvas",
     }
@@ -432,13 +613,20 @@ export function execute(w: Workspace, input: string, center?: { x: number; y: nu
       `Column deleted. Its tasks were moved to "${next.columns[0]}". Restore its checkpoint in History to undo.`
     )
   }
-  if (verb === "column" && sub === "new") {
-    const name = args.join(" ").trim()
-    if (!name || w.columns.includes(name))
-      throw new Error("Choose a new, nonempty column name.")
-    return result({ ...w, columns: [...w.columns, name] }, "Column created.")
+  if (verb === "column" && sub === "new")
+    return result(addColumn(w, args.join(" ")), "Column created.")
+  if (verb === "column" && sub === "rename") {
+    if (args.length !== 2)
+      throw new Error('Use column rename "Column" "New name".')
+    return result(renameColumn(w, args[0], args[1]), "Column renamed.")
+  }
+  if (verb === "label" && sub === "color") {
+    const label = w.labels.find((l) => l.name === args.slice(0, -1).join(" "))
+    if (!label) throw new Error("Create that label first.")
+    return result(setLabelColor(w, label.id, args.at(-1) ?? ""), "Label recolored.")
   }
   if (verb === "label" && sub === "new") {
+    const color = isHexColor(args.at(-1)) ? args.pop()!.toLowerCase() : w.accent
     const scope = args.at(-1)
     const name = args.slice(0, -1).join(" ").trim()
     if (
@@ -446,11 +634,11 @@ export function execute(w: Workspace, input: string, center?: { x: number; y: nu
       (scope !== "global" && scope !== "local") ||
       w.labels.some((l) => l.name === name)
     )
-      throw new Error('Use label new "Unique name" global|local.')
+      throw new Error('Use label new "Unique name" global|local [#hex].')
     return result(
       {
         ...w,
-        labels: [...w.labels, { id: uid(), name, scope, color: w.accent }],
+        labels: [...w.labels, { id: uid(), name, scope, color }],
       },
       "Label created."
     )

@@ -5,17 +5,29 @@ const paths = {
   kanban: "M3 4h18v16H3zM9 4v16M15 4v16M5 8h2M11 8h2M17 8h2M5 12h2M11 12h2",
   arrow: "M4 19 20 5M10 5h10v10",
   document: "M5 3h9l5 5v13H5zM14 3v6h5M8 13h8M8 17h8",
+  text: "M5 7V4h14v3M12 4v16M9 20h6",
+  link: "M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1",
   undo: "M9 4 3 10l6 6M3 10h11a6 6 0 0 1 6 6v4",
   lock: "M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3",
   unlock: "M7 10V7a5 5 0 0 1 10-1M5 10h14v11H5zM12 14v3",
   delete: "M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7",
   grip: "M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01",
+  open: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
+  plus: "M12 5v14M5 12h14",
+  close: "M6 6l12 12M18 6 6 18",
 }
-export default function BoardIcon({ name }: { name: keyof typeof paths }) {
+export type BoardIconName = keyof typeof paths
+export default function BoardIcon({
+  name,
+  size = 18,
+}: {
+  name: BoardIconName
+  size?: number
+}) {
   return (
     <svg
-      width="18"
-      height="18"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

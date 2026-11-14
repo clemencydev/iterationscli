@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { requireSupabaseEnv } from './env'
 import { cookies } from 'next/headers'
 
 /**
@@ -8,9 +9,11 @@ import { cookies } from 'next/headers'
 export async function createClient() {
   const cookieStore = await cookies()
 
+  const env = requireSupabaseEnv()
+
   return createServerClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_PUBLISHABLE_KEY!,
+    env.url,
+    env.key,
     {
       cookies: {
         getAll() {

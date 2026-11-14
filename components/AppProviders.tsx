@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation"
 import { ThemeProvider } from "@/components/theme-provider"
 import TerminalContextProvider from "@/contexts/TerminalContext/TerminalContext"
 import { AuthenticateProvider } from "@/contexts/AuthenticateContext"
+import FontLoader from "@/components/FontLoader"
 
 export default function AppProviders({
   children,
@@ -12,10 +13,17 @@ export default function AppProviders({
 }) {
   const pathname = usePathname()
   // Keep the original site theme everywhere; only the alpha skips legacy auth/commands.
-  if (pathname === "/alpha") return <ThemeProvider>{children}</ThemeProvider>
+  if (pathname === "/alpha")
+    return (
+      <ThemeProvider>
+        <FontLoader />
+        {children}
+      </ThemeProvider>
+    )
   return (
     <AuthenticateProvider>
       <ThemeProvider>
+        <FontLoader />
         <TerminalContextProvider>{children}</TerminalContextProvider>
       </ThemeProvider>
     </AuthenticateProvider>

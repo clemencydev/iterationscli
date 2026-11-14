@@ -1,14 +1,19 @@
-'use client';
-import { useState } from "react";
-import React from "react";
-import { CardHeader, Card, CardContent, CardDescription } from "../ui/card";
+import { describeDocument } from "@/lib/document"
 
-export default function DocumentDescription() {
-
+/** One-line summary shown under a document: length and reading time. */
+export default function DocumentDescription({
+  text,
+  className,
+}: {
+  text: string
+  className?: string
+}) {
+  const { words, characters, minutes } = describeDocument(text)
   return (
-    <div>
-      <Card>Hello</Card>
+    <div className={className}>
+      {words
+        ? `${words} ${words === 1 ? "word" : "words"} · ${characters} ${characters === 1 ? "character" : "characters"} · ${minutes} min read`
+        : "Empty document"}
     </div>
   )
-
 }

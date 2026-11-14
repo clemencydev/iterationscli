@@ -15,7 +15,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 18px;
-  background: var(--muted);
+  background: color-mix(in srgb, var(--muted) 40%, var(--background));
   border-bottom: 1px solid var(--border);
 }
 .title {
@@ -90,12 +90,66 @@
 .prompt label {
   white-space: nowrap;
 }
+.field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
 .prompt input {
   flex: 1;
+  width: 100%;
   min-width: 0;
   background: transparent;
   padding: 4px;
   outline: none;
+}
+/* Inline suggestion: an invisible copy of the input pushes the dimmed
+   remainder to the caret. */
+.ghost {
+  position: absolute;
+  inset: 0;
+  padding: 4px;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+.ghost span {
+  visibility: hidden;
+}
+.suggestions {
+  display: flex;
+  gap: 4px;
+  padding: 6px 24px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.suggestions button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  font-size: 11px;
+}
+.suggestions button:first-child {
+  border-color: var(--border);
+}
+.suggestions button:hover,
+.suggestions button[aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--ring);
+}
+.suggestions b {
+  font-weight: 500;
+}
+.suggestions span {
+  color: var(--muted-foreground);
+  font-size: 10px;
 }
 .prompt input::placeholder {
   color: var(--muted-foreground);
@@ -110,7 +164,7 @@
   gap: 12px;
   flex-wrap: wrap;
   padding: 10px 24px;
-  background: var(--muted);
+  background: color-mix(in srgb, var(--muted) 40%, var(--background));
   color: var(--muted-foreground);
   font-size: 9px;
   border-top: 1px solid var(--border);
