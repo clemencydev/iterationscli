@@ -1,0 +1,1324 @@
+"use client"
+
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from "react"
+import {
+  addTask,
+  addWhiteboardObject,
+  connectObjects,
+  resolveArrow,
+  deleteTask,
+  deleteColumn,
+  checkpoint,
+  execute,
+  HELP,
+  initialWorkspace,
+  mergeProposal,
+  parseProposals,
+  revert,
+  THEMES,
+  uid,
+  updateTask,
+  VERSION,
+  VIEWS,
+  type CommandResult,
+  type Task,
+  type View,
+  type Workspace as WorkspaceData,
+} from "@/lib/alpha"
+import styles from "./workspace.module.css"
+import { useTheme } from "next-themes"
+import Link from "next/link"
+import Whiteboard from "./Whiteboard"
+
+const STORAGE = "iterationscli.alpha.v1"
+const names: Record<View, string> = {
+  terminal: "Terminal",
+  board: "Task board",
+  canvas: "Canvas",
+  stats: "Statistics",
+  inbox: "Incoming",
+  history: "History",
+  settings: "Customize",
+}
+const icons: Record<View, string> = {
+  terminal: ">_",
+  board: "▤",
+  canvas: "✳",
+  stats: "▥",
+  inbox: "↓",
+  history: "↶",
+  settings: "◐",
+}
+
+export default function Workspace() {
+  const { resolvedTheme, setTheme } = useTheme()
+  const [w, setW] = useState<WorkspaceData>(initialWorkspace)
+  const [ready, setReady] = useState(false)
+  const [storageError, setStorageError] = useState("")
+  const [view, setView] = useState<View>("terminal")
+  const [split, setSplit] = useState<View | null>(null)
+  const [boardCamera, setBoardCamera] = useState({ x: 0, y: 0, zoom: 1 })
+  const boardSize = useRef({ width: 1000, height: 600 })
+  const boardCenter = () => ({ x: (boardSize.current.width / 2 - boardCamera.x) / boardCamera.zoom, y: (boardSize.current.height / 2 - boardCamera.y) / boardCamera.zoom })
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const terminalDialog = useRef<HTMLDialogElement>(null)
+  const popupPrompt = useRef<HTMLInputElement>(null)
+  const popupEnd = useRef<HTMLDivElement>(null)
+  const [notice, setNotice] = useState("")
+  const [selected, setSelected] = useState<string | null>(null)
+  const [confirm, setConfirm] = useState<CommandResult["confirm"]>()
+  const reviewedState = useRef<WorkspaceData | null>(null)
+  const [command, setCommand] = useState("")
+  const [log, setLog] = useState<string[]>([
+    "SYSTEM / Workspace ready. Type help to explore.",
+  ])
+  const [commands, setCommands] = useState<string[]>([])
+  const historyIndex = useRef(0)
+  const [greeting, setGreeting] = useState("")
+  const [query, setQuery] = useState("")
+  const [labelFilter, setLabelFilter] = useState("")
+  const [needsSubmission, setNeedsSubmission] = useState(false)
+  const [pendingJson, setPendingJson] = useState("")
+
+  const dialog = useRef<HTMLDialogElement>(null)
+  const terminalEnd = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const raw = localStorage.getItem(STORAGE)
+        if (raw) {
+          const saved = JSON.parse(raw) as WorkspaceData
+          if (
+            saved.schema !== 1 ||
+            !Array.isArray(saved.tasks) ||
+            !Array.isArray(saved.commits) ||
+            !Array.isArray(saved.columns) ||
+            !Array.isArray(saved.labels) ||
+            !Array.isArray(saved.strokes) ||
+            !Array.isArray(saved.proposals) ||
+            !Array.isArray(saved.merged)
+          )
+            throw new Error("Invalid saved workspace")
+          setW({ ...saved, objects: saved.objects ?? [] })
+        }
+        setReady(true)
+      } catch {
+        setStorageError(
+          "Saved workspace could not be loaded. Recover your browser data before clearing storage; autosave is disabled."
+        )
+      }
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [])
+  useEffect(() => {
+    if (!ready) return
+    try {
+      localStorage.setItem(STORAGE, JSON.stringify(w))
+    } catch {
+      const timer = setTimeout(
+        () =>
+          setStorageError(
+            "Browser storage is full or unavailable. Export a backup now; recent changes may not survive a reload."
+          ),
+        0
+      )
+      return () => clearTimeout(timer)
+    }
+  }, [w, ready])
+  useEffect(() => {
+    const text = "Make room for your next idea."
+    let n = 0
+    const reduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches
+    const timer = setInterval(() => {
+      n = reduced ? text.length : n + 1
+      setGreeting(text.slice(0, n))
+      if (n >= text.length) clearInterval(timer)
+    }, 42)
+    return () => clearInterval(timer)
+  }, [])
+  useEffect(() => {
+    terminalEnd.current?.scrollIntoView({ block: "nearest" })
+    popupEnd.current?.scrollIntoView({ block: "nearest" })
+  }, [log])
+  useEffect(() => {
+    if (terminalOpen) {
+      terminalDialog.current?.showModal()
+      popupPrompt.current?.focus()
+      popupEnd.current?.scrollIntoView({ block: "nearest" })
+    } else terminalDialog.current?.close()
+  }, [terminalOpen])
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        !ready ||
+        event.defaultPrevented ||
+        event.repeat ||
+        event.altKey ||
+        event.metaKey
+      )
+        return
+      if (event.ctrlKey && event.key.toLowerCase() === "y") {
+        event.preventDefault()
+        setSelected(null)
+        setTerminalOpen((open) => !open)
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [ready])
+  useEffect(() => {
+    if (selected) dialog.current?.showModal()
+    else dialog.current?.close()
+  }, [selected])
+
+  const change = (
+    fn: (current: WorkspaceData) => WorkspaceData,
+    message?: string
+  ) => {
+    try {
+      const next = fn(w)
+      setW(next)
+      if (message) setNotice(message)
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Something went wrong."
+      )
+    }
+  }
+  const completed = w.tasks.filter((t) => t.done).length
+  const pending = w.tasks.filter((t) => t.done && t.submission === "pending")
+  const task = w.tasks.find((t) => t.id === selected)
+  const submitCommand = (event?: FormEvent, override?: string) => {
+    event?.preventDefault()
+    const input = (override ?? command).trim()
+    if (!input) return
+    setCommands((prev) => [...prev, input])
+    historyIndex.current = commands.length + 1
+    setCommand("")
+    try {
+      if (confirm) {
+        if (!/^[yn]$/i.test(input))
+          throw new Error(
+            "A review is pending. Enter Y to confirm or N to cancel."
+          )
+        if (input.toLowerCase() === "y") {
+          if (reviewedState.current !== w) {
+            setConfirm(undefined)
+            throw new Error(
+              "The workspace changed since review. Review the merge or restore again before confirming."
+            )
+          }
+          setW(
+            confirm.type === "merge"
+              ? mergeProposal(w, confirm.id)
+              : revert(w, confirm.id)
+          )
+        }
+        setConfirm(undefined)
+        setLog((prev) => [
+          ...prev,
+          `> ${input}`,
+          input.toLowerCase() === "y"
+            ? "Applied. History updated."
+            : "Cancelled.",
+        ])
+        return
+      }
+      const result = execute(w, input, boardCenter())
+      setW(result.workspace)
+      if (result.view) setView(result.view)
+      if (result.split !== undefined) setSplit(result.split)
+      if (result.confirm) {
+        setConfirm(result.confirm)
+        reviewedState.current = w
+      }
+      setLog((prev) =>
+        result.clear ? [] : [...prev, `> ${input}`, result.output].slice(-200)
+      )
+    } catch (error) {
+      setLog((prev) => [
+        ...prev,
+        `> ${input}`,
+        `Error: ${error instanceof Error ? error.message : "Command failed."}`,
+      ])
+    }
+  }
+  function formText(event: FormEvent<HTMLFormElement>, key: string) {
+    return String(new FormData(event.currentTarget).get(key) ?? "").trim()
+  }
+  function exportBackup() {
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(w, null, 2)], { type: "application/json" })
+    )
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `iterationscli-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function terminal(popup = false) {
+    const inputId = popup ? "workspace-popup-command" : "alpha-command"
+    return (
+      <section className={styles.terminal} aria-label="Terminal">
+        <div className={styles.terminalHeading}>
+          <span className={styles.dots}>● ● ●</span>
+          <span>iterations / personal workspace</span>
+          <span>LOCAL</span>
+        </div>
+        <div className={styles.terminalBody}>
+          {!popup && (
+            <>
+              <div className={styles.ascii} aria-hidden="true">
+                [ i / cli ]
+              </div>
+              <p className={styles.eyebrow}>YOUR WORK, AT YOUR COMMAND.</p>
+              <h1>
+                {greeting}
+                <span className={styles.cursor}>▍</span>
+              </h1>
+              <p className={styles.muted}>
+                A little structure. A lot of possibility.
+              </p>
+              <div className={styles.quickStats}>
+                <span>
+                  <b>{w.tasks.length}</b> tasks
+                </span>
+                <span>
+                  <b>{completed}</b> completed
+                </span>
+                <span>
+                  <b>{w.proposals.length}</b> incoming
+                </span>
+              </div>
+              <div className={styles.quickCommands}>
+                <button
+                  onClick={() =>
+                    submitCommand(undefined, 'task new "My first task"')
+                  }
+                >
+                  + Create a task
+                </button>
+                <button onClick={() => setView("board")}>Open board ↗</button>
+                <button onClick={() => submitCommand(undefined, "help")}>
+                  Explore commands ↗
+                </button>
+              </div>
+            </>
+          )}
+          <div className={styles.log} role="log" aria-label="Command output">
+            {log.map((line, i) => (
+              <pre
+                key={i}
+                className={line.startsWith(">") ? styles.commandLine : ""}
+              >
+                {line}
+              </pre>
+            ))}
+            <div ref={popup ? popupEnd : terminalEnd} />
+          </div>
+        </div>
+        {confirm && (
+          <div className={styles.reviewActions}>
+            <span>Apply the change shown above?</span>
+            <button onClick={() => submitCommand(undefined, "Y")}>
+              Y · Confirm
+            </button>
+            <button onClick={() => submitCommand(undefined, "N")}>
+              N · Cancel
+            </button>
+          </div>
+        )}
+        <form onSubmit={submitCommand} className={styles.prompt}>
+          <label htmlFor={inputId}>{confirm ? "Y/N" : "you ~"} ❯</label>
+          <input
+            id={inputId}
+            ref={popup ? popupPrompt : undefined}
+            autoComplete="off"
+            spellCheck={false}
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder={
+              confirm
+                ? "Review above, then Y or N"
+                : 'Try: task new "Build something good"'
+            }
+            onKeyDown={(e) => {
+              if (e.ctrlKey && e.key.toLowerCase() === "l") {
+                e.preventDefault()
+                setLog([])
+              }
+              if (
+                e.ctrlKey &&
+                e.key.toLowerCase() === "c" &&
+                e.currentTarget.selectionStart === e.currentTarget.selectionEnd
+              ) {
+                e.preventDefault()
+                setCommand("")
+                setConfirm(undefined)
+                setLog((prev) => [...prev, "^C Cancelled."])
+              }
+              if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                e.preventDefault()
+                historyIndex.current = Math.max(
+                  0,
+                  Math.min(
+                    commands.length,
+                    historyIndex.current + (e.key === "ArrowUp" ? -1 : 1)
+                  )
+                )
+                setCommand(commands[historyIndex.current] ?? "")
+              }
+            }}
+          />
+          <button type="submit" aria-label="Run command">
+            ↵
+          </button>
+        </form>
+      </section>
+    )
+  }
+  function board() {
+    const visible = w.tasks.filter(
+      (t) =>
+        t.title.toLowerCase().includes(query.toLowerCase()) &&
+        (!labelFilter || t.labels.includes(labelFilter)) &&
+        (!needsSubmission || (t.done && t.submission === "pending"))
+    )
+    return (
+      <section className={styles.view}>
+        <div className={styles.viewTitle}>
+          <div>
+            <p className={styles.eyebrow}>A PLACE FOR EVERY NEXT STEP</p>
+            <h1>
+              Task board <small>{w.tasks.length}</small>
+            </h1>
+          </div>
+          <button
+            onClick={() => {
+              setView("terminal")
+              setCommand('task new ""')
+            }}
+          >
+            Use terminal ↗
+          </button>
+        </div>
+        <div className={styles.toolbar}>
+          <input
+            aria-label="Search tasks"
+            placeholder="Search tasks…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <select
+            aria-label="Filter by label"
+            value={labelFilter}
+            onChange={(e) => setLabelFilter(e.target.value)}
+          >
+            <option value="">All labels</option>
+            {w.labels.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+          <button
+            aria-pressed={needsSubmission}
+            onClick={() => setNeedsSubmission(!needsSubmission)}
+          >
+            Needs submission ({pending.length})
+          </button>
+        </div>
+        <form
+          className={styles.inlineForm}
+          onSubmit={(e) => {
+            e.preventDefault()
+            const title = formText(e, "title")
+            if (title) {
+              change((w) => addTask(w, title), "Task created.")
+              e.currentTarget.reset()
+            }
+          }}
+        >
+          <input
+            name="title"
+            required
+            aria-label="New task title"
+            placeholder="What needs doing?"
+          />
+          <button className={styles.primary}>+ Add task</button>
+        </form>
+        <div className={styles.board}>
+          {w.columns.map((column) => (
+            <div
+              className={styles.column}
+              key={column}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault()
+                const id = e.dataTransfer.getData("text/plain")
+                if (w.tasks.some((t) => t.id === id))
+                  change((w) => updateTask(w, id, { column }))
+              }}
+            >
+              <h2>
+                <span className={styles.columnDot} />
+                {column}
+                <small>
+                  {visible.filter((t) => t.column === column).length}
+                </small>
+              </h2>
+              <button
+                disabled={w.columns.length === 1}
+                title={`Tasks move to ${w.columns.find((c) => c !== column) ?? "another column"}. A restore checkpoint is saved.`}
+                onClick={() =>
+                  change(
+                    (w) => deleteColumn(w, column),
+                    `Column deleted. Tasks moved to ${w.columns.find((c) => c !== column)}. Undo in History.`
+                  )
+                }
+              >
+                Delete column
+              </button>
+              {visible
+                .filter((t) => t.column === column)
+                .map((t) => (
+                  <article
+                    key={t.id}
+                    className={styles.ticket}
+                    draggable
+                    onDragStart={(e) =>
+                      e.dataTransfer.setData("text/plain", t.id)
+                    }
+                  >
+                    <div className={styles.ticketTop}>
+                      <span>{t.id.slice(0, 8)}</span>
+                      <input
+                        type="checkbox"
+                        checked={t.done}
+                        aria-label={`Complete ${t.title}`}
+                        onChange={(e) =>
+                          change((w) =>
+                            updateTask(w, t.id, { done: e.target.checked })
+                          )
+                        }
+                      />
+                    </div>
+                    <button
+                      className={`${styles.ticketTitle} ${t.done ? styles.done : ""}`}
+                      onClick={() => setSelected(t.id)}
+                    >
+                      {t.title}
+                    </button>
+                    <div className={styles.badges}>
+                      {t.labels.map((id) => {
+                        const label = w.labels.find((l) => l.id === id)
+                        return label ? (
+                          <span key={id} style={{ color: label.color }}>
+                            {label.name}
+                          </span>
+                        ) : null
+                      })}
+                      {t.submission !== "none" && (
+                        <span>
+                          {t.submission === "pending"
+                            ? "Not submitted"
+                            : "Submitted"}
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.ticketFoot}>
+                      <span>{t.comments.length} comments</span>
+                      <button onClick={() => setSelected(t.id)}>
+                        Details ↗
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              {!visible.some((t) => t.column === column) && (
+                <div className={styles.emptyColumn}>
+                  Room for your next step.
+                </div>
+              )}
+            </div>
+          ))}
+          <form
+            className={styles.newColumn}
+            onSubmit={(e) => {
+              e.preventDefault()
+              const name = formText(e, "column")
+              if (name && !w.columns.includes(name)) {
+                change((w) => ({ ...w, columns: [...w.columns, name] }))
+                e.currentTarget.reset()
+              }
+            }}
+          >
+            <input
+              name="column"
+              required
+              aria-label="New column name"
+              placeholder="Column name"
+            />
+            <button>+ Add column</button>
+          </form>
+        </div>
+        <p className={styles.hint}>
+          Drag tickets between columns, or move them in Details. Completion is
+          separate from column and submission status.
+        </p>
+      </section>
+    )
+  }
+  function canvas() {
+    return (
+      <Whiteboard
+        camera={boardCamera}
+        setCamera={setBoardCamera}
+        onSize={size => { boardSize.current = size }}
+        onConnect={(from, to) => change(w => connectObjects(w, from, to), "Connected. The arrow follows both items.")}
+        objects={w.objects ?? []}
+        tasks={w.tasks}
+        columns={w.columns}
+        onObjectChange={(id, patch) =>
+          change((w) => ({
+            ...w,
+            objects: w.objects.map((o) =>
+              o.id === id ? { ...o, ...patch, id: o.id } : o
+            ),
+          }))
+        }
+        onObjectDelete={(id) =>
+          change(
+            (w) => ({
+              ...checkpoint(w, "Before deleting whiteboard object"),
+              objects: w.objects.filter((o) => o.id !== id).map(o => {
+                if (o.kind !== "arrow" || (o.from?.objectId !== id && o.to?.objectId !== id)) return o
+                return { ...resolveArrow(o, w.objects), from: o.from?.objectId === id ? undefined : o.from, to: o.to?.objectId === id ? undefined : o.to }
+              }),
+            }),
+            "Object deleted. Undo in History."
+          )
+        }
+        onObjectAdd={(kind) => change((w) => addWhiteboardObject(w, kind, "", boardCenter()))}
+        onBoardTask={(title, column) =>
+          change((w) => {
+            const next = addTask(w, title)
+            return updateTask(next, next.tasks.at(-1)!.id, { column })
+          })
+        }
+        onTaskChange={(id, patch) => change((w) => updateTask(w, id, patch))}
+        strokes={w.strokes}
+        notes={w.notes}
+        color={w.accent}
+        onStroke={(stroke) =>
+          change((w) => ({ ...w, strokes: [...w.strokes, stroke] }))
+        }
+        onUndo={() =>
+          change((w) => ({ ...w, strokes: w.strokes.slice(0, -1) }))
+        }
+        onNotes={(notes) => change((w) => ({ ...w, notes }))}
+        onTask={(text) =>
+          change((w) => {
+            const next = addTask(w, text)
+            return updateTask(next, next.tasks.at(-1)!.id, {
+              comments: ["Created from Canvas notes: " + text],
+            })
+          }, "Task created from your selection.")
+        }
+      />
+    )
+  }
+  function stats() {
+    const percent = w.tasks.length
+      ? Math.round((completed / w.tasks.length) * 100)
+      : 0
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date()
+      d.setDate(d.getDate() - 6 + i)
+      return {
+        label: d.toLocaleDateString(undefined, { weekday: "short" }),
+        count: w.tasks.filter(
+          (t) =>
+            t.done &&
+            t.completed &&
+            new Date(t.completed).toDateString() === d.toDateString()
+        ).length,
+      }
+    })
+    const max = Math.max(1, ...days.map((d) => d.count))
+    return (
+      <section className={styles.view}>
+        <p className={styles.eyebrow}>SMALL STEPS. VISIBLE PROGRESS.</p>
+        <h1>Your statistics</h1>
+        <div className={styles.metrics}>
+          {[
+            [w.tasks.length, "Total tasks"],
+            [completed, "Completed"],
+            [`${percent}%`, "Completion"],
+            [pending.length, "Needs submission"],
+          ].map(([value, label]) => (
+            <div key={label}>
+              <strong>{value}</strong>
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
+        <div className={styles.panel}>
+          <h2>Completed in the last 7 days</h2>
+          <p className={styles.muted}>
+            Current completed tasks, grouped by completion date.
+          </p>
+          <div
+            className={styles.chart}
+            role="img"
+            aria-label={days.map((d) => `${d.label}: ${d.count}`).join(", ")}
+          >
+            {days.map((d, i) => (
+              <div className={styles.barColumn} key={i}>
+                <span>{d.count}</span>
+                <div className={styles.barTrack}>
+                  <div
+                    className={styles.bar}
+                    style={{ height: `${(d.count / max) * 100}%` }}
+                  />
+                </div>
+                <small>{d.label}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className={styles.panel}>
+          <h2>By column</h2>
+          {w.columns.map((c) => {
+            const total = w.tasks.filter((t) => t.column === c).length
+            const done = w.tasks.filter((t) => t.column === c && t.done).length
+            return (
+              <div className={styles.progressRow} key={c}>
+                <span>{c}</span>
+                <progress max={total || 1} value={done} />
+                <span>
+                  {done}/{total}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+    )
+  }
+  function inbox() {
+    return (
+      <section className={styles.view}>
+        <p className={styles.eyebrow}>YOU DECIDE WHAT COMES IN</p>
+        <h1>
+          Incoming changes <small>{w.proposals.length}</small>
+        </h1>
+        <p className={styles.muted}>
+          Review proposed changes before they reach your board. This alpha
+          accepts manual JSON imports; external connectors are planned.
+        </p>
+        {w.proposals.map((p) => {
+          const old = w.tasks.find((t) => t.id === p.taskId)
+          return (
+            <div className={styles.panel} key={p.id}>
+              <div className={styles.ticketTop}>
+                <span>{p.source}</span>
+                <code>{p.id}</code>
+              </div>
+              <h2>{p.title}</h2>
+              <p>
+                {old
+                  ? `Update: “${old.title}” → “${p.title}”${p.done !== undefined ? ` · Completed: ${old.done ? "yes" : "no"} → ${p.done ? "yes" : "no"}` : ""}`
+                  : "Create a new task in the first column"}
+              </p>
+              <div className={styles.actions}>
+                <button
+                  className={styles.primary}
+                  onClick={() => {
+                    setView("terminal")
+                    submitCommand(undefined, `merge "${p.id}"`)
+                  }}
+                >
+                  Review merge →
+                </button>
+                <button
+                  onClick={() =>
+                    change(
+                      (w) => ({
+                        ...w,
+                        proposals: w.proposals.filter((x) => x.id !== p.id),
+                      }),
+                      "Proposal dismissed."
+                    )
+                  }
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )
+        })}
+        {!w.proposals.length && (
+          <div className={styles.empty}>
+            All caught up.
+            <span>Imported proposals will appear here for review.</span>
+          </div>
+        )}
+        <form
+          className={styles.panel}
+          onSubmit={(e) => {
+            e.preventDefault()
+            change(
+              (w) => ({
+                ...w,
+                proposals: [...w.proposals, ...parseProposals(pendingJson, w)],
+              }),
+              "Proposals imported. Review before merging."
+            )
+          }}
+        >
+          <h2>Import proposals</h2>
+          <p className={styles.hint}>
+            Required: id, title, source. Optional for updates: taskId (full ID),
+            done (boolean).
+          </p>
+          <textarea
+            aria-label="Proposal JSON"
+            required
+            value={pendingJson}
+            onChange={(e) => setPendingJson(e.target.value)}
+            placeholder={
+              '[{"id":"example-1","title":"Review the design","source":"Manual import"}]'
+            }
+          />
+          <button>Import for review</button>
+        </form>
+      </section>
+    )
+  }
+  function history() {
+    return (
+      <section className={styles.view}>
+        <p className={styles.eyebrow}>MOVE FORWARD. KEEP A WAY BACK.</p>
+        <h1>Workspace history</h1>
+        <p className={styles.muted}>
+          Named checkpoints save tasks, columns, labels, drawings, and notes.
+          Restoring preserves the history and saves the current state first.
+        </p>
+        <form
+          className={styles.inlineForm}
+          onSubmit={(e) => {
+            e.preventDefault()
+            change(
+              (w) => checkpoint(w, formText(e, "message")),
+              "Checkpoint saved."
+            )
+            e.currentTarget.reset()
+          }}
+        >
+          <input
+            name="message"
+            required
+            placeholder="Describe this checkpoint"
+            aria-label="Checkpoint description"
+          />
+          <button className={styles.primary}>Save checkpoint</button>
+        </form>
+        {[...w.commits].reverse().map((c) => (
+          <div className={styles.historyRow} key={c.id}>
+            <code title={c.id}>{c.id.slice(0, 8)}</code>
+            <div>
+              <strong>{c.message}</strong>
+              <span>
+                {new Date(c.date).toLocaleString()} · {c.snapshot.tasks.length}{" "}
+                tasks
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                setView("terminal")
+                submitCommand(undefined, `revert ${c.id}`)
+              }}
+            >
+              Restore…
+            </button>
+          </div>
+        ))}
+        {!w.commits.length && (
+          <div className={styles.empty}>
+            Your story starts here.
+            <span>Save a checkpoint before a big change.</span>
+          </div>
+        )}
+      </section>
+    )
+  }
+  function settings() {
+    return (
+      <section className={styles.view}>
+        <p className={styles.eyebrow}>MAKE YOURSELF AT HOME</p>
+        <h1>Customize your space</h1>
+        <div className={styles.panel}>
+          <h2>Website theme</h2>
+          <p className={styles.muted}>
+            Original follows the website’s black-and-white theme. Optional
+            palettes change the accent color.
+          </p>
+          <button
+            onClick={() =>
+              setTheme(resolvedTheme === "dark" ? "light" : "dark")
+            }
+          >
+            Toggle light / dark
+          </button>
+          <div className={styles.swatches}>
+            {Object.entries(THEMES).map(([name, color]) => (
+              <button
+                key={name}
+                aria-pressed={w.theme === name}
+                onClick={() =>
+                  change((w) => ({ ...w, theme: name, accent: color }))
+                }
+              >
+                <span style={{ background: color }} />
+                {name}
+              </button>
+            ))}
+          </div>
+          <label className={styles.colorLabel}>
+            Custom accent
+            <input
+              type="color"
+              value={w.accent}
+              onChange={(e) =>
+                change((w) => ({
+                  ...w,
+                  accent: e.target.value,
+                  theme: "custom",
+                }))
+              }
+            />
+          </label>
+          <label className={styles.colorLabel}>
+            <input
+              type="checkbox"
+              checked={w.scanlines}
+              onChange={(e) =>
+                change((w) => ({ ...w, scanlines: e.target.checked }))
+              }
+            />
+            Subtle retro scanlines
+          </label>
+          <p className={styles.hint}>
+            JetBrains Mono typography. Animation respects reduced-motion
+            preferences.
+          </p>
+        </div>
+        <div className={styles.panel}>
+          <h2>Labels</h2>
+          <p className={styles.muted}>
+            Global labels are available workspace-wide; local labels belong to
+            this board. This alpha has one board.
+          </p>
+          <form
+            className={styles.inlineForm}
+            onSubmit={(e) => {
+              e.preventDefault()
+              const data = new FormData(e.currentTarget)
+              const name = String(data.get("name")).trim()
+              if (!name || w.labels.some((l) => l.name === name)) {
+                setNotice("Choose a unique label name.")
+                return
+              }
+              change((w) => ({
+                ...w,
+                labels: [
+                  ...w.labels,
+                  {
+                    id: uid(),
+                    name,
+                    scope: data.get("scope") as "global" | "local",
+                    color: String(data.get("color")),
+                  },
+                ],
+              }))
+              e.currentTarget.reset()
+            }}
+          >
+            <input
+              name="name"
+              required
+              placeholder="Label name"
+              aria-label="Label name"
+            />
+            <select name="scope" aria-label="Label scope">
+              <option value="global">Global</option>
+              <option value="local">Local</option>
+            </select>
+            <input
+              name="color"
+              type="color"
+              defaultValue={w.accent}
+              aria-label="Label color"
+            />
+            <button>Add label</button>
+          </form>
+          <div className={styles.badges}>
+            {w.labels.map((l) => (
+              <span key={l.id} style={{ color: l.color }}>
+                {l.name} / {l.scope}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className={styles.panel}>
+          <h2>Your data</h2>
+          <p className={styles.muted}>
+            Stored in this browser on this device. No account or cloud sync is
+            required. Export backups before clearing browser data.
+          </p>
+          <button onClick={exportBackup}>Export workspace JSON ↓</button>
+          <p className={styles.hint}>
+            Alpha {VERSION} · Under active rework and testing.
+          </p>
+        </div>
+        <details className={styles.panel}>
+          <summary>Command reference</summary>
+          <pre className={styles.help}>{HELP}</pre>
+        </details>
+      </section>
+    )
+  }
+  const render = (tab: View) =>
+    ({ terminal, board, canvas, stats, inbox, history, settings })[tab]()
+  return (
+    <main
+      className={`${styles.shell} ${w.scanlines ? styles.scanlines : ""}`}
+      style={
+        {
+          "--alpha-accent":
+            w.theme === "original" ? "var(--primary)" : w.accent,
+        } as CSSProperties
+      }
+    >
+      <aside className={styles.sidebar}>
+        <Link href="/" className={styles.brand}>
+          <span>i/</span> iterations
+          <span className={styles.brandSuffix}>cli</span>
+        </Link>
+        <div className={styles.workspaceName}>
+          <span className={styles.avatar}>P</span>
+          <div>
+            Personal workspace<small>LOCAL ALPHA</small>
+          </div>
+        </div>
+        <p className={styles.navLabel}>WORKSPACE</p>
+        <nav aria-label="Workspace views">
+          {VIEWS.map((tab) => (
+            <button
+              key={tab}
+              className={view === tab ? styles.activeNav : ""}
+              onClick={() => setView(tab)}
+            >
+              <span>{icons[tab]}</span>
+              {names[tab]}
+              {tab === "inbox" && w.proposals.length > 0 && (
+                <small>{w.proposals.length}</small>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className={styles.sidebarBottom}>
+          <span className={styles.onlineDot} /> Personal · browser storage
+          <p>00.01.00-alpha.1</p>
+          <span>Built for the work in progress.</span>
+        </div>
+      </aside>
+      <div className={styles.main}>
+        <header className={styles.topbar}>
+          <span>
+            Workspace <span className={styles.muted}>/</span>{" "}
+            <b>{names[view]}</b>
+          </span>
+          <div>
+            <span className={styles.alphaBadge}>ALPHA 01</span>
+            <button
+              disabled={!ready}
+              onClick={() => setTerminalOpen(true)}
+              aria-keyshortcuts="Control+y"
+            >
+              &gt;_ Terminal <small>Ctrl+Y</small>
+            </button>
+            <label className={styles.splitLabel}>
+              Split view
+              <select
+                aria-label="Split view"
+                value={split ?? ""}
+                onChange={(e) => setSplit((e.target.value as View) || null)}
+              >
+                <option value="">Off</option>
+                {VIEWS.filter((v) => v !== "terminal" && v !== view).map(
+                  (v) => (
+                    <option key={v} value={v}>
+                      {names[v]}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+          </div>
+        </header>
+        <div className={styles.tabbar}>
+          {[
+            ...new Set(["terminal" as View, view, ...(split ? [split] : [])]),
+          ].map((v) => (
+            <button
+              key={v}
+              className={view === v ? styles.activeTab : ""}
+              onClick={() => {
+                if (split === v) setSplit(null)
+                setView(v)
+              }}
+            >
+              {icons[v]} {names[v]}
+            </button>
+          ))}
+          <button aria-label="Open task board" onClick={() => setView("board")}>
+            ＋
+          </button>
+        </div>
+        {storageError && (
+          <div className={styles.warning} role="alert">
+            {storageError}{" "}
+            <button onClick={exportBackup}>Export current workspace</button>
+          </div>
+        )}
+        {notice && (
+          <div className={styles.notice} role="status">
+            {notice}
+            <button
+              aria-label="Dismiss notification"
+              onClick={() => setNotice("")}
+            >
+              ×
+            </button>
+          </div>
+        )}
+        <div
+          className={`${styles.panes} ${split && split !== view ? styles.split : ""}`}
+        >
+          <div
+            className={`${styles.pane} ${view === "canvas" ? styles.canvasPane : ""}`}
+          >
+            {ready ? (
+              render(view)
+            ) : (
+              <div className={styles.empty}>
+                {storageError
+                  ? "Workspace recovery needed."
+                  : "Opening workspace…"}
+              </div>
+            )}
+          </div>
+          {ready && split && split !== view && (
+            <div
+              className={`${styles.pane} ${split === "canvas" ? styles.canvasPane : ""}`}
+            >
+              {render(split)}
+            </div>
+          )}
+        </div>
+        <footer className={styles.statusbar}>
+          <span>
+            <span className={styles.onlineDot} />
+            {storageError
+              ? "Storage needs attention"
+              : ready
+                ? "Autosave enabled · local workspace"
+                : "Loading"}
+          </span>
+          <span>
+            {completed}/{w.tasks.length} complete{" "}
+            <span className={styles.muted}>/</span> {VERSION}
+          </span>
+        </footer>
+      </div>
+      <dialog
+        ref={terminalDialog}
+        className={styles.terminalPopup}
+        aria-labelledby="workspace-terminal-title"
+        onCancel={() => setTerminalOpen(false)}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setTerminalOpen(false)
+        }}
+      >
+        <div className={styles.popupTitlebar}>
+          <h2 id="workspace-terminal-title">&gt;_ Workspace terminal</h2>
+          <button
+            aria-label="Close workspace terminal"
+            onClick={() => setTerminalOpen(false)}
+          >
+            ×
+          </button>
+        </div>
+        {terminal(true)}
+        <div className={styles.popupHint}>
+          help · ↑↓ history · Ctrl+L clear · Ctrl+C cancel · Esc / Ctrl+Y close
+        </div>
+      </dialog>
+      <dialog
+        ref={dialog}
+        className={styles.dialog}
+        onCancel={() => setSelected(null)}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setSelected(null)
+        }}
+      >
+        {task && (
+          <div>
+            <button
+              onClick={() => {
+                change(
+                  (w) => deleteTask(w, task.id),
+                  "Task deleted. Restore its checkpoint in History to undo."
+                )
+                setSelected(null)
+              }}
+            >
+              Delete task
+            </button>
+            <div className={styles.viewTitle}>
+              <code title={task.id}>{task.id}</code>
+              <button
+                aria-label="Close task details"
+                onClick={() => setSelected(null)}
+              >
+                ×
+              </button>
+            </div>
+            <label className={styles.field}>
+              Title
+              <input
+                value={task.title}
+                onChange={(e) =>
+                  change((w) =>
+                    updateTask(w, task.id, { title: e.target.value })
+                  )
+                }
+              />
+            </label>
+            <label className={styles.colorLabel}>
+              <input
+                type="checkbox"
+                checked={task.done}
+                onChange={(e) =>
+                  change((w) =>
+                    updateTask(w, task.id, { done: e.target.checked })
+                  )
+                }
+              />
+              Completed
+            </label>
+            <div className={styles.toolbar}>
+              <label className={styles.field}>
+                Column
+                <select
+                  value={task.column}
+                  onChange={(e) =>
+                    change((w) =>
+                      updateTask(w, task.id, { column: e.target.value })
+                    )
+                  }
+                >
+                  {w.columns.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.field}>
+                Submission
+                <select
+                  value={task.submission}
+                  onChange={(e) =>
+                    change((w) =>
+                      updateTask(w, task.id, {
+                        submission: e.target.value as Task["submission"],
+                      })
+                    )
+                  }
+                >
+                  <option value="none">Not applicable</option>
+                  <option value="pending">Not submitted</option>
+                  <option value="submitted">Submitted</option>
+                </select>
+              </label>
+            </div>
+            <h2>Labels</h2>
+            <div className={styles.badges}>
+              {w.labels.map((l) => (
+                <label key={l.id} style={{ color: l.color }}>
+                  <input
+                    type="checkbox"
+                    checked={task.labels.includes(l.id)}
+                    onChange={(e) =>
+                      change((w) =>
+                        updateTask(w, task.id, {
+                          labels: e.target.checked
+                            ? [...task.labels, l.id]
+                            : task.labels.filter((id) => id !== l.id),
+                        })
+                      )
+                    }
+                  />{" "}
+                  {l.name}
+                </label>
+              ))}
+            </div>
+            {!w.labels.length && (
+              <p className={styles.hint}>
+                Create labels in Customize or with label new.
+              </p>
+            )}
+            <h2>Comments</h2>
+            {task.comments.map((c, i) => (
+              <p className={styles.comment} key={i}>
+                {c}
+              </p>
+            ))}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                const text = formText(e, "comment")
+                if (text) {
+                  change((w) =>
+                    updateTask(w, task.id, {
+                      comments: [...task.comments, text],
+                    })
+                  )
+                  e.currentTarget.reset()
+                }
+              }}
+            >
+              <textarea
+                name="comment"
+                required
+                aria-label="Comment"
+                placeholder="Add context or a note…"
+              />
+              <button>Add comment</button>
+            </form>
+          </div>
+        )}
+      </dialog>
+    </main>
+  )
+}

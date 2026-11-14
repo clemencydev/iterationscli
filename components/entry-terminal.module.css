@@ -1,0 +1,189 @@
+.window {
+  width: min(780px, calc(100vw - 24px));
+  max-width: none;
+  padding: 0;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  overflow: hidden;
+  font-family: var(--font-mono), monospace;
+}
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.title {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 400;
+}
+.window button {
+  cursor: pointer;
+}
+.titlebar button {
+  width: 28px;
+  height: 28px;
+  font-size: 20px;
+}
+.screen {
+  padding: 22px 24px;
+  max-height: min(65dvh, 570px);
+  overflow-y: auto;
+  min-height: 220px;
+}
+.output pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.8;
+  margin-bottom: 10px;
+}
+.menu {
+  display: grid;
+  gap: 4px;
+  margin-top: 24px;
+}
+.menu button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  font-size: 12px;
+}
+.menu .selected {
+  background: var(--accent);
+  border-color: var(--border);
+}
+.menu button > span:first-child {
+  width: 10px;
+}
+.menu small {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.menu code {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.prompt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.prompt label {
+  white-space: nowrap;
+}
+.prompt input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  padding: 4px;
+  outline: none;
+}
+.prompt input::placeholder {
+  color: var(--muted-foreground);
+}
+.prompt button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 9px;
+  border-top: 1px solid var(--border);
+}
+.auth {
+  margin-top: 24px;
+  border-top: 1px dashed var(--border);
+  padding-top: 18px;
+}
+.auth h2 {
+  font-size: 14px;
+}
+.auth p {
+  font-size: 11px;
+  margin: 10px 0 20px;
+  color: var(--muted-foreground);
+}
+.auth label {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+  margin: 12px 0;
+}
+.auth input {
+  min-width: 0;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  padding: 9px 12px;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+.actions button {
+  border: 1px solid var(--border);
+  padding: 9px 16px;
+  font-size: 12px;
+}
+.actions button:first-child {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.auth .error {
+  color: var(--destructive);
+}
+.window :is(button, input):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.window button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+@media (max-width: 540px) {
+  .screen {
+    padding: 16px;
+  }
+  .menu code {
+    display: none;
+  }
+  .prompt {
+    padding: 14px;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .auth label {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .footer {
+    padding: 10px 14px;
+  }
+}

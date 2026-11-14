@@ -1,0 +1,340 @@
+.whiteboard {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  overflow: hidden;
+  background: var(--background);
+  isolation: isolate;
+}
+.object {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  position: relative;
+  box-shadow: 0 4px 12px #00000016;
+  overflow: hidden;
+  padding-bottom: 24px;
+}
+.object.sticky {
+  background: color-mix(in srgb, var(--card) 88%, #e4b93d);
+  border: none;
+  box-shadow: 0 3px 8px #00000012;
+}
+.sticky .objectHeader {
+  background: transparent;
+  border-bottom: 0;
+  padding: 4px 8px 0;
+}
+.whiteboard .objectHeader button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  padding: 6px;
+  color: var(--muted-foreground);
+}
+.sticky .objectHeader button:not(.moveObject),
+.sticky .resizeObject {
+  opacity: 0;
+}
+.sticky:hover .objectHeader button,
+.sticky:focus-within .objectHeader button,
+.sticky:hover .resizeObject,
+.sticky:focus-within .resizeObject {
+  opacity: 1;
+}
+.whiteboard .objectHeader button:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.whiteboard .resizeObject:disabled {
+  visibility: hidden;
+}
+.whiteboard .moveObject:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.sticky textarea {
+  padding-top: 4px !important;
+  font-size: 16px;
+  line-height: 1.7;
+}
+.whiteboard .objectHeader button[aria-pressed="true"] {
+  color: var(--foreground);
+}
+.whiteboard .tools {
+  padding: 7px;
+  gap: 3px;
+  border-radius: 10px;
+  max-height: calc(100% - 140px);
+  overflow-y: auto;
+  box-shadow: 0 6px 24px #00000018;
+}
+.whiteboard .tools button {
+  border: 0;
+  background: transparent;
+  padding: 9px 10px;
+  border-radius: 6px;
+  gap: 11px;
+  color: var(--muted-foreground);
+}
+.whiteboard .tools button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.whiteboard .tools button[aria-pressed="true"] {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.toolDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 3px;
+}
+.toolCaption {
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--muted-foreground);
+  padding: 4px 10px;
+}
+.whiteboard .ink input {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.ink input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.ink input::-webkit-color-swatch {
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+.ink input::-moz-color-swatch {
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+.objectHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.objectHeader .moveObject {
+  touch-action: none;
+  cursor: move;
+  flex: 1;
+  text-align: left;
+  text-transform: capitalize;
+  font-size: 11px;
+}
+.object textarea {
+  flex: 1;
+  min-height: 0 !important;
+  width: 100%;
+  margin: 0 !important;
+  resize: none !important;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 16px !important;
+}
+.object .resizeObject {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  touch-action: none;
+  cursor: nwse-resize;
+  padding: 0 7px;
+}
+.arrowLabel {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  color: var(--foreground);
+  border: 0;
+}
+.arrowLabel input {
+  width: 100%;
+  padding: 4px !important;
+  font-size: 11px !important;
+  background: transparent !important;
+  border: 0 !important;
+  text-align: center;
+}
+.arrowLabel input:placeholder-shown {
+  opacity: 0;
+}
+.arrowObject:hover .arrowLabel input,
+.arrowObject:focus-within .arrowLabel input {
+  opacity: 1;
+}
+.whiteboard .arrowDelete {
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  opacity: 0;
+}
+.arrowObject:hover .arrowDelete,
+.arrowObject:focus-within .arrowDelete {
+  opacity: 1;
+}
+.miniBoard {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.miniBoard > section {
+  min-width: 190px;
+  width: 190px;
+  background: var(--muted);
+  padding: 8px;
+  overflow: auto;
+}
+.miniBoard h3 {
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.miniTask {
+  background: var(--card);
+  border: 1px solid var(--border);
+  padding: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.miniTask label {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+.miniTask select {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 10px !important;
+}
+.miniBoard form input {
+  width: 100%;
+  font-size: 11px !important;
+}
+.miniBoard form button {
+  margin-top: 6px;
+}
+.surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+}
+.hud {
+  position: absolute;
+  z-index: 1;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px #00000015;
+}
+.title {
+  left: 18px;
+  top: 18px;
+  padding: 10px 15px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.title strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.title span {
+  font-size: 10px;
+  color: var(--muted-foreground);
+}
+.tools {
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 5px;
+  display: grid;
+  gap: 5px;
+}
+.tools button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  font-size: 13px;
+}
+.tools button span {
+  font-size: 10px;
+}
+.ink {
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+}
+.zoom {
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+}
+.notes {
+  top: 72px;
+  right: 18px;
+  width: min(310px, calc(100% - 125px));
+  padding: 14px;
+  max-height: calc(100% - 145px);
+  overflow: auto;
+}
+.notes > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.notes textarea {
+  min-height: 130px;
+  font-size: 12px;
+}
+.hint {
+  position: absolute;
+  left: 18px;
+  bottom: 22px;
+  font-size: 10px;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+@container (max-width: 600px) {
+  .hint {
+    display: none;
+  }
+  .title span {
+    display: none;
+  }
+  .tools button span {
+    display: none;
+  }
+  .tools {
+    left: 10px;
+  }
+  .notes {
+    right: 10px;
+    width: calc(100% - 80px);
+  }
+}

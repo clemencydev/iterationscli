@@ -1,0 +1,30 @@
+const paths = {
+  pen: "m15 4 5 5M4 20l4-1L20 7a2 2 0 0 0-3-3L5 16z",
+  hand: "M8 12V6a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v9c0 4-3 6-6 6h-1c-2 0-4-1-5-3l-5-6a2 2 0 0 1 3-2l2 2",
+  sticky: "M4 3h16v12l-5 6H4zM14 21v-7h6",
+  kanban: "M3 4h18v16H3zM9 4v16M15 4v16M5 8h2M11 8h2M17 8h2M5 12h2M11 12h2",
+  arrow: "M4 19 20 5M10 5h10v10",
+  document: "M5 3h9l5 5v13H5zM14 3v6h5M8 13h8M8 17h8",
+  undo: "M9 4 3 10l6 6M3 10h11a6 6 0 0 1 6 6v4",
+  lock: "M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3",
+  unlock: "M7 10V7a5 5 0 0 1 10-1M5 10h14v11H5zM12 14v3",
+  delete: "M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7",
+  grip: "M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01",
+}
+export default function BoardIcon({ name }: { name: keyof typeof paths }) {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={name === "grip" ? 3 : 1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={paths[name]} />
+    </svg>
+  )
+}

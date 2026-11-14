@@ -4,6 +4,7 @@ import { TerminalContextValue } from "@/types/terminal";
 import { Dispatch, SetStateAction } from "react";
 
 export type CommandName =
+  | "workspace"
   | "help"
   | "auth"
 // | "settings"
@@ -27,6 +28,15 @@ export type Command = {
 }
 
 export const Commands: Record<CommandName, Command> = {
+  workspace: {
+    name: "workspace",
+    usage: "Open the alpha workspace",
+    auth_required: false,
+    handler: ({ router, setTerminalState }) => {
+      setTerminalState(prev => ({ ...prev, active: false }));
+      router?.push("/alpha");
+    },
+  },
   auth: {
     name: "auth",
     usage: "Used for sign-up/sign-in/sign-out of user accounts",
