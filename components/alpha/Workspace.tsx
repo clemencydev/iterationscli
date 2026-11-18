@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent,
   type FormEvent,
 } from "react"
 import {
@@ -19,7 +20,13 @@ import {
   deleteColumn,
   checkpoint,
   DEFAULT_PALETTE,
+  boardNeighbour,
+  describeObject,
+  drawingGroups,
   execute,
+  lineEnds,
+  linkItems,
+  linkSymbol,
   HELP,
   initialWorkspace,
   isHexColor,
@@ -64,6 +71,24 @@ import { applySelection } from "@/lib/canvas-selection"
 import Menu from "./Menu"
 import TrendChart from "./TrendChart"
 import ShellTerminal, { type LogEntry } from "./ShellTerminal"
+import { Divider, PaneChooser, PaneTree, VIEW_DRAG } from "./Panes"
+import {
+  closePane,
+  findBlank,
+  findLeaf,
+  findView,
+  isLayout,
+  leaf,
+  leaves,
+  nextLeaf,
+  onlyPane,
+  placeView,
+  resizeSplit,
+  setView as setPaneView,
+  splitPane,
+  type Pane,
+  type Zone,
+} from "@/lib/panes"
 import { useAuthenticate } from "@/hooks/use-authenticate"
 import {
   banner,
@@ -111,6 +136,7 @@ const stamp = (w: WorkspaceData): WorkspaceData => ({
 })
 const SHELL_STORAGE = "iterations:shell"
 const HISTORY_STORAGE = "iterations:history"
+const LAYOUT_STORAGE = "iterations:layout"
 const labelStyle = (label: Label) =>
   ({ "--label": label.color }) as CSSProperties
 
@@ -119,9 +145,32 @@ export default function Workspace() {
   const [w, setW] = useState<WorkspaceData>(initialWorkspace)
   const [ready, setReady] = useState(false)
   const [storageError, setStorageError] = useState("")
-  const [view, setView] = useState<View>("terminal")
+  // Undo and redo: workspaces as they were before and after each change.
+  const past = useRef<WorkspaceData[]>([])
+  const future = useRef<WorkspaceData[]>([])
+  const lastChange = useRef(0)
+  // The views on screen: a tree of panes (lib/panes.ts) and the one the
+  // keyboard belongs to. Each view is shown at most once.
+  const [layout, setLayout] = useState<Pane<View>>(() =>
+    leaf<View>("terminal", "main")
+  )
+  const [focus, setFocus] = useState("main")
+  /** A view being dragged from the sidebar, a tab or a pane's bar. */
+  const [dragView, setDragView] = useState<View | null>(null)
+  /** Share of the width the panes keep when a ticket or docked terminal sits beside them. */
+  const [sideRatio, setSideRatio] = useState(0.62)
+  /** The view the terminal last `cd`-ed to. */
+  const [cwd, setCwd] = useState<View | null>(null)
+  /** The ticket the arrow keys are on, on the task board. */
+  const [boardCursor, setBoardCursor] = useState<string | null>(null)
+  /** Pane to move keyboard focus into once it has rendered. */
+  const pendingFocus = useRef<string | null>(null)
+  const panes = leaves(layout)
+  const focused = findLeaf(layout, focus) ?? panes[0]
+  /** The view the keyboard is in; an empty pane counts as its neighbour. */
+  const view: View =
+    focused.view ?? panes.find((pane) => pane.view)?.view ?? "terminal"
   const [tabs, setTabs] = useState<View[]>(["terminal"])
-  const [split, setSplit] = useState<View | null>(null)
   const [splitTask, setSplitTask] = useState<string | null>(null)
   const [boardCamera, setBoardCamera] = useState({ x: 0, y: 0, zoom: 1 })
   const boardSize = useRef({ width: 1000, height: 600 })
@@ -204,8 +253,17 @@ export default function Workspace() {
           setCommands(
             past.filter((line) => typeof line === "string").slice(-200)
           )
+        const saved: unknown = JSON.parse(
+          localStorage.getItem(LAYOUT_STORAGE) ?? "null"
+        )
+        if (isLayout(saved, VIEWS)) {
+          const shown = leaves(saved)
+          setLayout(saved)
+          setFocus(shown[0].id)
+          setTabs(shown.flatMap((pane) => (pane.view ? [pane.view] : [])))
+        }
       } catch {
-        // No saved shell or history: start fresh.
+        // No saved shell, history or layout: start fresh.
       }
       try {
         const raw = localStorage.getItem(STORAGE)
@@ -264,6 +322,29 @@ export default function Workspace() {
     }
   }, [commands, ready])
   useEffect(() => {
+    if (!ready) return
+    try {
+      localStorage.setItem(LAYOUT_STORAGE, JSON.stringify(layout))
+    } catch {
+      // The layout is rebuilt in a few keystrokes.
+    }
+  }, [layout, ready])
+  // After a pane is opened or switched to from the keyboard, put the keyboard
+  // in it: the prompt for the terminal, the first control anywhere else.
+  useEffect(() => {
+    const id = pendingFocus.current
+    if (!id) return
+    pendingFocus.current = null
+    const pane = document.querySelector<HTMLElement>(`[data-pane="${id}"]`)
+    if (!pane) return
+    const target =
+      pane.querySelector<HTMLElement>("#alpha-command") ??
+      pane.querySelector<HTMLElement>("[data-option]") ??
+      pane.querySelector<HTMLElement>("[data-keys]") ??
+      pane
+    target.focus({ preventScroll: true })
+  })
+  useEffect(() => {
     if (terminalOpen && terminalMode === "modal") {
       terminalDialog.current?.showModal()
     } else terminalDialog.current?.close()
@@ -287,14 +368,11 @@ export default function Workspace() {
   }, [terminalOpen, terminalMode])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        !ready ||
-        event.defaultPrevented ||
-        event.repeat ||
-        event.altKey ||
-        event.metaKey
-      )
-        return
+      if (!ready || event.defaultPrevented) return
+      // Undo, redo, splitting and moving between panes (these may repeat, and
+      // on a Mac they use ⌘).
+      if (!event.altKey && keys.current.pane(event)) return
+      if (event.repeat || event.altKey || event.metaKey) return
       if (event.ctrlKey && event.key.toLowerCase() === "y") {
         event.preventDefault()
         setSelected(null)
@@ -305,13 +383,7 @@ export default function Workspace() {
       if (event.ctrlKey && event.key === "`") {
         event.preventDefault()
         if (terminalOpen) popupPrompt.current?.focus()
-        else if (view === "terminal") mainPrompt.current?.focus()
-        else {
-          setView("terminal")
-          setTabs((prev) =>
-            prev.includes("terminal") ? prev : [...prev, "terminal"]
-          )
-        }
+        else keys.current.terminal()
         return
       }
       const typing =
@@ -341,11 +413,37 @@ export default function Workspace() {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [ready, terminalOpen, terminalMode, view])
+  }, [ready, terminalOpen, terminalMode])
   useEffect(() => {
     if (selected) dialog.current?.showModal()
     else dialog.current?.close()
   }, [selected])
+
+  /**
+   * Every edit to the workspace goes through here so it can be undone. Edits
+   * that follow each other closely (a drag, a burst of typing) are one step.
+   */
+  const commit = (next: WorkspaceData) => {
+    const now = Date.now()
+    if (now - lastChange.current > 600 || !past.current.length)
+      past.current = [...past.current, w].slice(-100)
+    lastChange.current = now
+    future.current = []
+    setW(stamp(next))
+  }
+  /** Steps back (undo) or forward (redo). Returns false at either end. */
+  const travel = (direction: "undo" | "redo") => {
+    const from = direction === "undo" ? past : future
+    const to = direction === "undo" ? future : past
+    const target = from.current[from.current.length - 1]
+    if (!target) return false
+    from.current = from.current.slice(0, -1)
+    to.current = [...to.current, w]
+    // The next edit starts a step of its own.
+    lastChange.current = 0
+    setW(stamp(target))
+    return true
+  }
 
   const change = (
     fn: (current: WorkspaceData) => WorkspaceData,
@@ -353,7 +451,7 @@ export default function Workspace() {
   ) => {
     try {
       const next = fn(w)
-      if (next !== w) setW(stamp(next))
+      if (next !== w) commit(next)
       if (message) setNotice(message)
       return true
     } catch (error) {
@@ -363,24 +461,158 @@ export default function Workspace() {
       return false
     }
   }
-  /** Shows a view in the main pane, opening a tab for it if needed. */
-  const open = (next: View) => {
-    setView(next)
+  const addTab = (next: View) =>
     setTabs((prev) => (prev.includes(next) ? prev : [...prev, next]))
-    if (split === next) setSplit(null)
+  /** Moves the keyboard to a pane (and, once rendered, into it). */
+  const focusPane = (id: string) => {
+    pendingFocus.current = id
+    setFocus(id)
+  }
+  /**
+   * Shows a view: the pane already showing it gets the keyboard, otherwise it
+   * replaces what the focused pane shows.
+   */
+  const open = (next: View) => {
+    const shown = findView(layout, next)
+    if (shown) focusPane(shown.id)
+    else {
+      setLayout(setPaneView(layout, focused.id, next))
+      pendingFocus.current = focused.id
+    }
+    addTab(next)
+  }
+  /**
+   * Splits a pane (the focused one unless `target` is given). With a view it
+   * opens beside the pane; without, an empty pane asks what to open. "row"
+   * puts the new pane to the right, "column" below.
+   */
+  const splitWith = (
+    direction: "row" | "column",
+    next: View | null,
+    { target = focused.id, keepFocus = false } = {}
+  ) => {
+    const side = direction === "row" ? "right" : "bottom"
+    if (next === null) {
+      // One empty pane at a time: asking twice goes back to the first.
+      const blank = findBlank(layout)
+      if (blank) return focusPane(blank.id)
+      const added = leaf<View>(null)
+      setLayout(splitPane(layout, target, side, added))
+      return focusPane(added.id)
+    }
+    const placed = placeView(layout, next, target, side)
+    setLayout(placed.layout)
+    addTab(next)
+    if (!keepFocus) focusPane(placed.id)
+  }
+  const closePaneById = (id: string) => {
+    if (panes.length < 2) return false
+    const index = panes.findIndex((pane) => pane.id === id)
+    const next = closePane(layout, id)
+    setLayout(next)
+    if (focus === id) {
+      const rest = leaves(next)
+      focusPane(rest[Math.min(index, rest.length - 1)].id)
+    }
+    return true
+  }
+  const dropView = (target: string, zone: Zone) => {
+    if (!dragView) return
+    const placed = placeView(layout, dragView, target, zone)
+    setLayout(placed.layout)
+    addTab(dragView)
+    focusPane(placed.id)
+    setDragView(null)
   }
   const closeTab = (tab: View) => {
     const index = tabs.indexOf(tab)
     const rest = tabs.filter((t) => t !== tab)
     if (!rest.length) return
     setTabs(rest)
-    if (view === tab) setView(rest[Math.max(0, index - 1)])
+    const shown = findView(layout, tab)
+    if (!shown) return
+    // With other panes around the pane goes; the last pane shows another tab.
+    if (!closePaneById(shown.id))
+      setLayout(setPaneView(layout, shown.id, rest[Math.max(0, index - 1)]))
   }
+  /** What a draggable view (sidebar entry, tab) needs to be dropped on a pane. */
+  const dragProps = (dragged: View) => ({
+    draggable: true,
+    onDragStart: (event: DragEvent<HTMLElement>) => {
+      event.dataTransfer.setData(VIEW_DRAG, dragged)
+      event.dataTransfer.effectAllowed = "move"
+      setDragView(dragged)
+    },
+    onDragEnd: () => setDragView(null),
+  })
+  const undo = () => {
+    const done = travel("undo")
+    setNotice(done ? "Undone. Ctrl+Shift+Z redoes." : "Nothing to undo.")
+    return done
+  }
+  const redo = () => {
+    const done = travel("redo")
+    setNotice(done ? "Redone." : "Nothing to redo.")
+    return done
+  }
+  // Workspace-wide keys. The listener is registered once, so it reaches the
+  // current state through this ref.
+  const keys = useRef({
+    terminal: () => {},
+    pane: (() => false) as (event: KeyboardEvent) => boolean,
+  })
+  useEffect(() => {
+    keys.current = {
+      terminal: () => open("terminal"),
+      pane: (event) => {
+        const key = event.key.toLowerCase()
+        const target = event.target as HTMLElement | null
+        const typing = !!target?.closest?.(
+          "input,textarea,select,[contenteditable=true],[role=textbox]"
+        )
+        // An empty prompt has nothing of its own to undo.
+        const emptyPrompt =
+          target instanceof HTMLInputElement &&
+          !target.value &&
+          (target.id === "alpha-command" ||
+            target.id === "workspace-popup-command")
+        const mod = event.ctrlKey || event.metaKey
+        if (mod && key === "z" && (!typing || emptyPrompt)) {
+          event.preventDefault()
+          if (event.shiftKey) redo()
+          else undo()
+          return true
+        }
+        if (event.repeat) return false
+        if (mod && event.code === "Backslash") {
+          event.preventDefault()
+          splitWith(event.shiftKey ? "column" : "row", null)
+          return true
+        }
+        if (event.key === "F6") {
+          event.preventDefault()
+          focusPane(nextLeaf(layout, focused.id, event.shiftKey ? -1 : 1).id)
+          return true
+        }
+        if (typing || mod || event.shiftKey) return false
+        if (key === "v" || key === "h") {
+          event.preventDefault()
+          splitWith(key === "v" ? "row" : "column", null)
+          return true
+        }
+        if (key === "x" && panes.length > 1) {
+          event.preventDefault()
+          closePaneById(focused.id)
+          return true
+        }
+        return false
+      },
+    }
+  })
   const completed = w.tasks.filter((t) => t.done).length
   const pending = w.tasks.filter((t) => t.done && t.submission === "pending")
   const task = w.tasks.find((t) => t.id === selected)
   const paneTask = w.tasks.find((t) => t.id === splitTask)
-  const sideView = paneTask ? null : split && split !== view ? split : null
   const palette = w.palette ?? DEFAULT_PALETTE
   const penColor =
     w.penColor ?? (isHexColor(w.accent) ? w.accent : DEFAULT_PALETTE[0])
@@ -400,8 +632,25 @@ export default function Workspace() {
         description: c.message,
       })),
       proposal: w.proposals.map((p) => ({ value: p.id, description: p.title })),
+      // What `link` can connect, each with enough words to tell them apart.
+      object: w.objects
+        .filter((o) => o.kind !== "arrow")
+        .map((o) => ({
+          value: o.id.slice(0, 8),
+          description: describeObject(o, w),
+        })),
+      arrow: w.objects
+        .filter((o) => o.kind === "arrow")
+        .map((o) => ({
+          value: o.id.slice(0, 8),
+          description: `${o.from?.objectId.slice(0, 8) ?? "loose"} ${linkSymbol(lineEnds(o))} ${o.to?.objectId.slice(0, 8) ?? "loose"}${o.text ? ` "${o.text}"` : ""}`,
+        })),
+      drawing: drawingGroups(w).map((g) => ({
+        value: g.id.slice(0, 8),
+        description: `${g.name} (${g.strokes.length} strokes)`,
+      })),
     }),
-    [w.tasks, w.columns, w.labels, w.commits, w.proposals]
+    [w]
   )
   const completion = useCompletion(
     command,
@@ -414,8 +663,14 @@ export default function Workspace() {
   const promptContext = {
     user: user?.username?.trim().toLowerCase().replace(/\s+/g, "-") || "you",
     workspace: "personal",
-    // Where the prompt says you are: the view beside the terminal, if any.
-    view: view === "terminal" ? (sideView ?? "terminal") : view,
+    // Where the prompt says you are: the view last `cd`-ed to while it is
+    // still open, or the view a terminal window is floating over.
+    view:
+      cwd && findView(layout, cwd)
+        ? cwd
+        : terminalOpen && view !== "terminal"
+          ? view
+          : "terminal",
   }
   const prompt = promptSegments(shell, promptContext)
   const print = (...entries: LogEntry[]) =>
@@ -456,12 +711,10 @@ export default function Workspace() {
               "The workspace changed since review. Review the merge or restore again before confirming."
             )
           }
-          setW(
-            stamp(
-              confirm.type === "merge"
-                ? mergeProposal(w, confirm.id)
-                : revert(w, confirm.id)
-            )
+          commit(
+            confirm.type === "merge"
+              ? mergeProposal(w, confirm.id)
+              : revert(w, confirm.id)
           )
         }
         setConfirm(undefined)
@@ -499,21 +752,57 @@ export default function Workspace() {
         )
       }
       if (own) return say(own.output ?? "")
-      const result = execute(w, input, boardCenter())
-      if (result.workspace !== w) setW(stamp(result.workspace))
-      if (result.view) open(result.view)
-      if (result.go) {
-        // From the workspace's own terminal, `cd` puts the view beside it so
-        // the prompt stays under your hands; a terminal window floats over
-        // the views anyway, so there it simply switches view.
-        if (view === "terminal" && !terminalOpen) {
-          setSplit(result.go === "terminal" ? null : result.go)
-          setSplitTask(null)
-        } else open(result.go)
+      if (/^(undo|redo)$/i.test(input)) {
+        const which = input.toLowerCase() as "undo" | "redo"
+        return say(
+          travel(which)
+            ? which === "undo"
+              ? "Undone. `redo` (Ctrl+Shift+Z) brings it back."
+              : "Redone."
+            : `Nothing to ${which}.`
+        )
       }
-      if (result.split !== undefined) {
-        setSplit(result.split)
-        setSplitTask(null)
+      const result = execute(w, input, boardCenter())
+      if (result.workspace !== w) commit(result.workspace)
+      let said = result.output
+      // From the workspace's own terminal the keyboard stays at the prompt; a
+      // terminal window floats over the views, so there the view just opens.
+      const here = !terminalOpen && focused.view === "terminal"
+      if (result.view) {
+        // `tab` asks to go there. Anything else (adding to the canvas, say)
+        // only wants the view on screen, so it opens beside the terminal.
+        if (here && !/^tab\b/i.test(input)) {
+          if (!findView(layout, result.view))
+            splitWith("row", result.view, { keepFocus: true })
+        } else open(result.view)
+      }
+      if (result.go) {
+        if (result.go === "terminal") setCwd(null)
+        else {
+          if (!findView(layout, result.go)) {
+            if (here) splitWith("row", result.go, { keepFocus: true })
+            else open(result.go)
+          }
+          setCwd(result.go)
+        }
+      }
+      if (result.pane?.op === "split") {
+        splitWith(result.pane.direction, result.pane.view, { keepFocus: here })
+        said = result.pane.view
+          ? `${names[result.pane.view]} opened ${result.pane.direction === "row" ? "beside" : "below"} this pane.`
+          : "New pane: pick what to open."
+      }
+      if (result.pane?.op === "close") {
+        const shown = findView(layout, result.pane.view)
+        said = !shown
+          ? `${names[result.pane.view]} is not open.`
+          : closePaneById(shown.id)
+            ? `Closed ${names[result.pane.view]}.`
+            : "That is the only pane."
+      }
+      if (result.pane?.op === "only") {
+        setLayout(onlyPane(layout, focused.id))
+        said = panes.length > 1 ? "Closed the other panes." : "Already the only pane."
       }
       if (result.ticket) {
         setSelected(null)
@@ -524,7 +813,7 @@ export default function Workspace() {
         reviewedState.current = w
       }
       if (result.clear) setLog([])
-      else say(result.output)
+      else say(said)
     } catch (error) {
       print(echo, {
         kind: "error",
@@ -556,7 +845,7 @@ export default function Workspace() {
         )
       )
         return
-      setW(stamp(normalizeWorkspace(saved)))
+      commit(normalizeWorkspace(saved))
       setNotice("Backup restored.")
     } catch (error) {
       setNotice(
@@ -648,6 +937,10 @@ export default function Workspace() {
               key={tab}
               className={view === tab ? styles.activeNav : ""}
               aria-current={view === tab ? "page" : undefined}
+              title={
+                inPopup ? undefined : "Click to open · drag onto a pane to split"
+              }
+              {...(inPopup ? {} : dragProps(tab))}
               onClick={() => {
                 open(tab)
                 if (inPopup) setTerminalOpen(false)
@@ -821,8 +1114,7 @@ export default function Workspace() {
               key={item.id}
               onClick={() => {
                 setSelected(null)
-                setView("canvas")
-                setSplit(null)
+                open("canvas")
                 setSplitTask(task.id)
                 setCanvasFocus({ id: item.id, request: Date.now() })
               }}
@@ -896,8 +1188,60 @@ export default function Workspace() {
         (!labelFilter || t.labels.includes(labelFilter)) &&
         (!needsSubmission || (t.done && t.submission === "pending"))
     )
+    const cursorTask = visible.find((t) => t.id === boardCursor)
     return (
-      <section className={styles.view}>
+      <section
+        className={styles.view}
+        tabIndex={-1}
+        data-keys
+        // The arrow keys walk from ticket to ticket instead of scrolling:
+        // Enter opens one, Space completes it, Shift+←/→ moves it a column.
+        onKeyDown={(e) => {
+          if (
+            e.ctrlKey ||
+            e.metaKey ||
+            e.altKey ||
+            (e.target as HTMLElement).closest(
+              "input,textarea,select,[contenteditable=true],[role=menu]"
+            )
+          )
+            return
+          const step = {
+            ArrowLeft: "left",
+            ArrowRight: "right",
+            ArrowUp: "up",
+            ArrowDown: "down",
+          }[e.key] as "left" | "right" | "up" | "down" | undefined
+          if (step) {
+            e.preventDefault()
+            if (e.shiftKey && cursorTask && (step === "left" || step === "right")) {
+              const to =
+                w.columns[
+                  w.columns.indexOf(cursorTask.column) +
+                    (step === "left" ? -1 : 1)
+                ]
+              if (to) change((w) => updateTask(w, cursorTask.id, { column: to }))
+              return
+            }
+            const next = boardNeighbour(w.columns, visible, cursorTask?.id, step)
+            if (!next) return
+            setBoardCursor(next)
+            document
+              .querySelector(`[data-ticket="${next}"]`)
+              ?.scrollIntoView({ block: "nearest", inline: "nearest" })
+          } else if (e.key === "Enter" && cursorTask) {
+            if ((e.target as HTMLElement).closest("button,a")) return
+            e.preventDefault()
+            setSelected(cursorTask.id)
+          } else if (e.key === " " && cursorTask) {
+            if ((e.target as HTMLElement).closest("button,a")) return
+            e.preventDefault()
+            change((w) =>
+              updateTask(w, cursorTask.id, { done: !cursorTask.done })
+            )
+          }
+        }}
+      >
         <div className={styles.viewTitle}>
           <div>
             <p className={styles.eyebrow}>A PLACE FOR EVERY NEXT STEP</p>
@@ -1039,6 +1383,9 @@ export default function Workspace() {
                     <article
                       key={t.id}
                       className={styles.ticket}
+                      data-ticket={t.id}
+                      data-cursor={t.id === boardCursor ? "" : undefined}
+                      onPointerDown={() => setBoardCursor(t.id)}
                       draggable
                       onDragStart={(e) =>
                         e.dataTransfer.setData("text/plain", t.id)
@@ -1127,6 +1474,10 @@ export default function Workspace() {
     return (
       <Whiteboard
         focusItem={canvasFocus}
+        groups={w.groups ?? []}
+        onConnect={(from, to) =>
+          change((w) => linkItems(w, from, to), "Connected. Select the arrow to change its ends.")
+        }
         onSelectionAction={(selected, action) =>
           change(
             (w) => applySelection(w, selected, action),
@@ -1857,6 +2208,9 @@ export default function Workspace() {
   const render = (tab: View) =>
     ({ terminal, board, canvas, stats, inbox, history, settings })[tab]()
   const unopened = VIEWS.filter((v) => !tabs.includes(v))
+  // A ticket or a docked terminal sits beside the panes, behind a divider.
+  const docked = ready && terminalOpen && terminalMode === "split"
+  const beside = ready && (!!paneTask || docked)
   return (
     <main
       className={`${styles.shell} ${w.scanlines ? styles.scanlines : ""}`}
@@ -1890,31 +2244,22 @@ export default function Workspace() {
             >
               &gt;_ Terminal <small>Ctrl+Y</small>
             </button>
-            <label className={styles.splitLabel}>
-              Split view
-              <select
-                aria-label="Split view"
-                value={paneTask ? "ticket" : (sideView ?? "")}
-                onChange={(e) => {
-                  setSplitTask(null)
-                  setSplit(
-                    e.target.value === "ticket"
-                      ? null
-                      : (e.target.value as View) || null
-                  )
-                }}
-              >
-                <option value="">Off</option>
-                {paneTask && <option value="ticket">Ticket</option>}
-                {VIEWS.filter((v) => v !== "terminal" && v !== view).map(
-                  (v) => (
-                    <option key={v} value={v}>
-                      {names[v]}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
+            <button
+              disabled={!ready}
+              onClick={() => splitWith("row", null)}
+              aria-keyshortcuts="Control+\"
+              title="Split side by side and choose what to open (Ctrl+\ or V)"
+            >
+              ◫ Split <small>Ctrl+\</small>
+            </button>
+            <button
+              disabled={!ready}
+              onClick={() => splitWith("column", null)}
+              aria-label="Split top and bottom"
+              title="Split top and bottom and choose what to open (Ctrl+Shift+\ or H)"
+            >
+              ⬓
+            </button>
           </div>
         </header>
         <div className={styles.tabbar} role="tablist" aria-label="Open views">
@@ -1922,6 +2267,8 @@ export default function Workspace() {
             <div
               key={v}
               className={`${styles.tab} ${view === v ? styles.activeTab : ""}`}
+              title="Drag onto a pane to split"
+              {...dragProps(v)}
             >
               <button
                 role="tab"
@@ -1978,41 +2325,105 @@ export default function Workspace() {
             </button>
           </div>
         )}
-        <div
-          className={`${styles.panes} ${paneTask || sideView || (terminalOpen && terminalMode === "split") ? styles.split : ""}`}
-        >
+        <div className={`${styles.panes} ${beside ? styles.split : ""}`}>
           <div
-            className={`${styles.pane} ${view === "canvas" ? styles.canvasPane : ""}`}
+            className={styles.paneArea}
+            style={beside ? { flexGrow: sideRatio } : undefined}
           >
             {ready ? (
-              render(view)
+              <PaneTree
+                layout={layout}
+                focus={focused.id}
+                multi={panes.length > 1}
+                dragging={dragView !== null}
+                title={(pane) =>
+                  pane.view ? (
+                    <>
+                      <span aria-hidden="true">{icons[pane.view]}</span>{" "}
+                      {names[pane.view]}
+                    </>
+                  ) : (
+                    "New pane"
+                  )
+                }
+                renderLeaf={(pane) => (
+                  <div
+                    className={`${styles.pane} ${pane.view === "canvas" ? styles.canvasPane : ""}`}
+                  >
+                    {pane.view ? (
+                      render(pane.view)
+                    ) : (
+                      <PaneChooser
+                        options={VIEWS.filter(
+                          (v) => !findView(layout, v)
+                        ).map((v) => ({
+                          view: v,
+                          label: (
+                            <>
+                              <span aria-hidden="true">{icons[v]}</span>{" "}
+                              {names[v]}
+                            </>
+                          ),
+                        }))}
+                        autoFocus={pane.id === focused.id}
+                        onPick={(v) => {
+                          setLayout(setPaneView(layout, pane.id, v))
+                          addTab(v)
+                          focusPane(pane.id)
+                        }}
+                        onClose={() => closePaneById(pane.id)}
+                      />
+                    )}
+                  </div>
+                )}
+                onFocus={setFocus}
+                onResize={(id, ratio) =>
+                  setLayout((current) => resizeSplit(current, id, ratio))
+                }
+                onDropView={dropView}
+                onSplit={(id, direction) =>
+                  splitWith(direction, null, { target: id })
+                }
+                onClose={closePaneById}
+                onDragView={setDragView}
+              />
             ) : (
-              <div className={`${styles.empty} ${styles.loading}`}>
+              <div className={`${styles.pane} ${styles.empty} ${styles.loading}`}>
                 {storageError
                   ? "Workspace recovery needed."
                   : "Opening workspace…"}
               </div>
             )}
           </div>
-          {ready && paneTask && (
-            <div className={styles.pane} aria-label="Ticket">
-              {ticket(paneTask, () => setSplitTask(null), true)}
-            </div>
+          {beside && (
+            <Divider
+              direction="row"
+              ratio={sideRatio}
+              onChange={(ratio) =>
+                setSideRatio(Math.min(0.85, Math.max(0.2, ratio)))
+              }
+              label="Resize the side pane"
+            />
           )}
-          {ready && sideView && (
+          {beside && (
             <div
-              className={`${styles.pane} ${sideView === "canvas" ? styles.canvasPane : ""}`}
+              className={styles.sideArea}
+              style={{ flexGrow: 1 - sideRatio }}
             >
-              {render(sideView)}
-            </div>
-          )}
-          {ready && terminalOpen && terminalMode === "split" && (
-            <div
-              className={`${styles.pane} ${styles.dockedTerminal}`}
-              role="region"
-              aria-label="Terminal split pane"
-            >
-              {terminalWindow()}
+              {paneTask && (
+                <div className={styles.pane} aria-label="Ticket">
+                  {ticket(paneTask, () => setSplitTask(null), true)}
+                </div>
+              )}
+              {docked && (
+                <div
+                  className={`${styles.pane} ${styles.dockedTerminal}`}
+                  role="region"
+                  aria-label="Terminal split pane"
+                >
+                  {terminalWindow()}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -539,15 +539,17 @@
   overflow: hidden;
   container-type: inline-size;
 }
-.split > .pane + .pane {
-  border-left: 1px solid var(--line);
+/* The tree of panes (Panes.tsx), and beside it, behind a divider, the ticket
+   or docked terminal. Their shares of the width are set inline as flex-grow. */
+.paneArea,
+.sideArea {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
 }
-.split > .pane:first-child {
-  resize: horizontal;
-  flex: none;
-  width: 58%;
-  min-width: 260px;
-  max-width: 78%;
+.sideArea > .pane + .pane {
+  border-left: 1px solid var(--line);
 }
 .statusbar {
   display: flex;
@@ -1346,22 +1348,23 @@
     flex-direction: column;
     overflow: auto;
   }
-  .split > .pane:first-child {
+  /* Stacked: the panes, then whatever sits beside them. */
+  .split > .paneArea,
+  .split > .sideArea {
+    flex: none !important;
     width: 100%;
-    max-width: none;
-    min-width: 0;
-    resize: none;
-    flex: none;
-    min-height: 400px;
+    min-height: 60dvh;
   }
-  .split > .pane + .pane {
+  .split > .sideArea {
+    flex-direction: column;
+    border-top: 1px solid var(--line);
+  }
+  .sideArea > .pane + .pane {
     border-left: 0;
     border-top: 1px solid var(--line);
-    flex: none;
-    min-height: 400px;
   }
-  .split > .canvasPane {
-    height: 65dvh;
+  .panes.split > [role="separator"] {
+    display: none;
   }
   .statusbar {
     font-size: 9px;
@@ -1491,4 +1494,13 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* The ticket the arrow keys are on (task board). */
+.ticket[data-cursor] {
+  outline: 2px solid var(--alpha-accent);
+  outline-offset: 1px;
+}
+.view:focus {
+  outline: none;
 }

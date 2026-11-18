@@ -1,7 +1,11 @@
 import {
   checkpoint,
+  drawingGroups,
+  groupStrokes,
   linkObjectToTask,
+  nameGroup,
   resolveArrow,
+  ungroup,
   type Workspace,
   type Stroke,
   type WhiteboardObject,
@@ -149,11 +153,52 @@ export type SelectionAction =
   | { type: "delete" }
   | { type: "comment"; text: string }
   | { type: "assign"; taskId?: string; column?: string }
+  /** Make one named drawing of the selected strokes (or rename the one they are). */
+  | { type: "group"; name: string }
+  | { type: "ungroup" }
+
+/** A selection grown to whole drawings: picking one stroke picks its group. */
+export function withGroups(
+  strokes: Stroke[],
+  selected: CanvasSelection
+): CanvasSelection {
+  const groups = new Set(
+    strokes
+      .filter((s) => s.group && selected.strokes.includes(s.id))
+      .map((s) => s.group)
+  )
+  if (!groups.size) return selected
+  const ids = strokes
+    .filter((s) => selected.strokes.includes(s.id) || groups.has(s.group))
+    .map((s) => s.id)
+  return ids.length === selected.strokes.length
+    ? selected
+    : { ...selected, strokes: ids }
+}
+/** The one drawing a selection of strokes is exactly, if it is. */
+export function selectedGroup(w: Workspace, selected: CanvasSelection) {
+  return drawingGroups(w).find(
+    (g) =>
+      g.strokes.length === selected.strokes.length &&
+      g.strokes.every((s) => selected.strokes.includes(s.id))
+  )
+}
 export function applySelection(
   w: Workspace,
   selected: CanvasSelection,
   action: SelectionAction
 ): Workspace {
+  if (action.type === "group") {
+    const existing = selectedGroup(w, selected)
+    if (existing)
+      return nameGroup(w, existing.id, action.name || existing.name)
+    return groupStrokes(w, selected.strokes, action.name).workspace
+  }
+  if (action.type === "ungroup") {
+    const existing = selectedGroup(w, selected)
+    if (!existing) throw new Error("Select one whole drawing to ungroup.")
+    return ungroup(w, existing.id)
+  }
   if (action.type === "assign") {
     if (action.taskId && !w.tasks.some((t) => t.id === action.taskId))
       throw new Error("Task not found.")
@@ -208,6 +253,15 @@ export function applySelection(
       selected.strokes.includes(s.id) ? patch(s) : s
     ),
   }
+  // Several strokes linked to a ticket together are one drawing: the ticket
+  // lists it once, under one ID, instead of once per stroke.
+  if (
+    action.type === "assign" &&
+    action.taskId &&
+    selected.strokes.length > 1 &&
+    !selectedGroup(next, selected)
+  )
+    next = groupStrokes(next, selected.strokes).workspace
   if (action.type === "assign" && "taskId" in action) {
     const obsolete = new Set(
       next.objects
@@ -246,4 +300,56 @@ export function applySelection(
       }
   }
   return next
+}
+
+export type Direction = "left" | "right" | "up" | "down"
+/**
+ * The item an arrow key moves the selection to: the nearest one whose centre
+ * lies in that direction, favouring those straight ahead. With nothing
+ * selected yet, the item closest to `origin` (the middle of the view).
+ * Returns undefined when there is nowhere to go.
+ */
+export function neighbour(
+  objects: WhiteboardObject[],
+  current: string | undefined,
+  direction: Direction,
+  origin = { x: 0, y: 0 }
+): string | undefined {
+  const centre = (o: WhiteboardObject) => {
+    const box = objectBox(o, objects)
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  }
+  const from = objects.find((o) => o.id === current)
+  if (!from) {
+    let best: string | undefined
+    let nearest = Infinity
+    for (const o of objects) {
+      const c = centre(o)
+      const d = Math.hypot(c.x - origin.x, c.y - origin.y)
+      if (d < nearest) {
+        nearest = d
+        best = o.id
+      }
+    }
+    return best
+  }
+  const here = centre(from)
+  const horizontal = direction === "left" || direction === "right"
+  const sign = direction === "left" || direction === "up" ? -1 : 1
+  let best: string | undefined
+  let lowest = Infinity
+  for (const o of objects) {
+    if (o.id === from.id) continue
+    const c = centre(o)
+    const ahead = (horizontal ? c.x - here.x : c.y - here.y) * sign
+    const aside = Math.abs(horizontal ? c.y - here.y : c.x - here.x)
+    // Behind, or further to the side than ahead: not "in that direction".
+    if (ahead <= 0 || aside > ahead * 2) continue
+    const score = ahead + aside * 2
+    if (score < lowest) {
+      lowest = score
+      best = o.id
+    }
+  }
+  return best
 }

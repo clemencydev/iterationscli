@@ -25,7 +25,14 @@ export type Stroke = {
   color: string
   /** Pen thickness in canvas units. Older strokes have none and render at 3. */
   width?: number
+  /** Id of the drawing this stroke is part of; see `DrawingGroup`. */
+  group?: string
 }
+/**
+ * Several pen strokes treated as one drawing: one ID to refer to and one
+ * entry on a ticket, however many strokes it took to draw.
+ */
+export type DrawingGroup = { id: string; name: string }
 export const PEN_WIDTHS = [2, 3, 5, 8, 14]
 export const DEFAULT_PALETTE = [
   "#e5e5e5",
@@ -54,6 +61,8 @@ export type WhiteboardObject = {
   html?: string
   from?: Connection
   to?: Connection
+  /** What an arrow draws at each end. Missing means a plain directed arrow. */
+  ends?: LineEnds
   locked?: boolean
   id: string
   kind: WhiteboardKind
@@ -68,6 +77,76 @@ export type WhiteboardObject = {
   width: number
   height: number
   text: string
+}
+/** A marker at the end of a line: nothing, an arrowhead, a dot or a diamond. */
+export type LineEnd = "none" | "arrow" | "dot" | "diamond"
+export type LineEnds = { start: LineEnd; end: LineEnd }
+export const LINE_ENDS: LineEnd[] = ["none", "arrow", "dot", "diamond"]
+/** The ends an arrow draws; arrows made before ends existed are directed. */
+export const lineEnds = (item: Pick<WhiteboardObject, "ends">): LineEnds =>
+  item.ends ?? { start: "none", end: "arrow" }
+/** The usual kinds of connection, by the names and symbols people type. */
+export const LINK_STYLES: Record<string, LineEnds> = {
+  directed: { start: "none", end: "arrow" },
+  "->": { start: "none", end: "arrow" },
+  undirected: { start: "none", end: "none" },
+  line: { start: "none", end: "none" },
+  "--": { start: "none", end: "none" },
+  both: { start: "arrow", end: "arrow" },
+  "<->": { start: "arrow", end: "arrow" },
+  reverse: { start: "arrow", end: "none" },
+  "<-": { start: "arrow", end: "none" },
+}
+/** "A -> B", "A -- B", … : how a connection reads in text. */
+export function linkSymbol(ends: LineEnds) {
+  const mark = (end: LineEnd, arrow: string) =>
+    end === "arrow" ? arrow : end === "dot" ? "o" : end === "diamond" ? "<>" : ""
+  return `${mark(ends.start, "<")}--${mark(ends.end, ">")}`.replace("---", "--")
+}
+/** A canvas item in a few words: what completion and listings show. */
+export function describeObject(o: WhiteboardObject, w: Pick<Workspace, "tasks">) {
+  const text =
+    o.kind === "link"
+      ? (w.tasks.find((t) => t.id === o.taskId)?.title ?? "no ticket")
+      : o.text.replace(/\s+/g, " ").trim()
+  return `${o.kind}${text ? `: ${text.slice(0, 48)}` : ""}`
+}
+/**
+ * Connects two canvas items with an arrow between the sides that face each
+ * other. `ends` chooses directed (the default), undirected, both ways…
+ */
+export function linkItems(
+  w: Workspace,
+  fromId: string,
+  toId: string,
+  ends: LineEnds = { start: "none", end: "arrow" },
+  label = ""
+): Workspace {
+  const from = w.objects.find((o) => o.id === fromId && o.kind !== "arrow")
+  const to = w.objects.find((o) => o.id === toId && o.kind !== "arrow")
+  if (!from || !to || from.id === to.id)
+    throw new Error("Connect two different items.")
+  const [fromSide, toSide] = facingSides(from, to)
+  const next = connectObjects(
+    w,
+    { objectId: from.id, side: fromSide },
+    { objectId: to.id, side: toSide }
+  )
+  return {
+    ...next,
+    objects: next.objects.map((o, i) =>
+      i === next.objects.length - 1 ? { ...o, ends, text: label } : o
+    ),
+  }
+}
+/** Removes every arrow between two items, whichever way it points. */
+export function unlinkItems(w: Workspace, a: string, b: string): Workspace {
+  const joins = (o: WhiteboardObject) =>
+    o.kind === "arrow" &&
+    ((o.from?.objectId === a && o.to?.objectId === b) ||
+      (o.from?.objectId === b && o.to?.objectId === a))
+  if (!w.objects.some(joins)) throw new Error("Those two are not connected.")
+  return { ...w, objects: w.objects.filter((o) => !joins(o)) }
 }
 /** Derive reciprocal links from current objects, so relinking/deleting never leaves stale ticket references. */
 export function ticketCanvasItems(w: Workspace, taskId: string) {
@@ -90,10 +169,102 @@ export function ticketCanvasItems(w: Workspace, taskId: string) {
           o.text.trim().slice(0, 80) ||
           (o.kind === "link" ? "Ticket shortcut" : o.kind),
       })),
+    // A drawing made of many strokes is one entry, under its name.
+    ...drawingGroups(w)
+      .filter((g) => g.strokes.some((s) => s.taskId === taskId))
+      .map((g) => ({ id: g.id, kind: "drawing", title: g.name })),
     ...w.strokes
-      .filter((s) => s.taskId === taskId)
+      .filter((s) => s.taskId === taskId && !s.group)
       .map((s) => ({ id: s.id, kind: "drawing", title: "Linked drawing" })),
   ]
+}
+/**
+ * The ticket an arrow key moves to on the task board: up and down within a
+ * column, left and right to the nearest column that has tickets (keeping the
+ * row where it can). With no ticket selected yet, the first one on the board.
+ */
+export function boardNeighbour(
+  columns: string[],
+  tasks: Pick<Task, "id" | "column">[],
+  current: string | undefined,
+  direction: "left" | "right" | "up" | "down"
+): string | undefined {
+  const grid = columns.map((column) =>
+    tasks.filter((t) => t.column === column).map((t) => t.id)
+  )
+  const at = grid.findIndex((ids) => current !== undefined && ids.includes(current))
+  if (at < 0) return grid.find((ids) => ids.length)?.[0]
+  const row = grid[at].indexOf(current!)
+  if (direction === "up" || direction === "down")
+    return grid[at][row + (direction === "up" ? -1 : 1)]
+  const step = direction === "left" ? -1 : 1
+  for (let c = at + step; c >= 0 && c < grid.length; c += step)
+    if (grid[c].length) return grid[c][Math.min(row, grid[c].length - 1)]
+  return undefined
+}
+/** The drawings on the canvas: each group that still has strokes, with them. */
+export function drawingGroups(w: Pick<Workspace, "strokes" | "groups">) {
+  return (w.groups ?? [])
+    .map((group) => ({
+      ...group,
+      strokes: w.strokes.filter((s) => s.group === group.id),
+    }))
+    .filter((group) => group.strokes.length > 0)
+}
+/**
+ * Makes one drawing out of the given strokes (taking them out of any drawing
+ * they were in) and returns its id. Drawings left without strokes disappear.
+ */
+export function groupStrokes(
+  w: Workspace,
+  strokeIds: string[],
+  name = ""
+): { workspace: Workspace; id: string } {
+  const chosen = new Set(strokeIds)
+  if (!w.strokes.some((s) => chosen.has(s.id)))
+    throw new Error("Select some pen strokes to group.")
+  const id = uid()
+  const strokes = w.strokes.map((s) =>
+    chosen.has(s.id) ? { ...s, group: id } : s
+  )
+  const used = new Set(strokes.map((s) => s.group))
+  const count = (w.groups ?? []).filter((g) => used.has(g.id)).length
+  return {
+    id,
+    workspace: {
+      ...w,
+      strokes,
+      groups: [
+        ...(w.groups ?? []).filter((g) => used.has(g.id)),
+        { id, name: name.trim() || `Drawing ${count + 1}` },
+      ],
+    },
+  }
+}
+/** Renames a drawing. */
+export function nameGroup(w: Workspace, id: string, name: string): Workspace {
+  if (!name.trim()) throw new Error("A drawing needs a name.")
+  if (!(w.groups ?? []).some((g) => g.id === id))
+    throw new Error("Drawing not found.")
+  return {
+    ...w,
+    groups: (w.groups ?? []).map((g) =>
+      g.id === id ? { ...g, name: name.trim() } : g
+    ),
+  }
+}
+/** Breaks a drawing back into loose strokes. */
+export function ungroup(w: Workspace, id: string): Workspace {
+  return {
+    ...w,
+    strokes: w.strokes.map((s) => {
+      if (s.group !== id) return s
+      const rest = { ...s }
+      delete rest.group
+      return rest
+    }),
+    groups: (w.groups ?? []).filter((g) => g.id !== id),
+  }
 }
 export type WhiteboardKind =
   | "sticky"
@@ -348,6 +519,11 @@ export function normalizeWorkspace(saved: Workspace): Workspace {
       : [...DEFAULT_PALETTE],
     penWidth: typeof saved.penWidth === "number" ? saved.penWidth : 3,
     penColor: isHexColor(saved.penColor) ? saved.penColor : undefined,
+    groups: Array.isArray(saved.groups)
+      ? saved.groups.filter(
+          (g) => typeof g?.id === "string" && typeof g?.name === "string"
+        )
+      : [],
   }
 }
 export function isWorkspace(value: unknown): value is Workspace {
@@ -398,6 +574,8 @@ export type Workspace = Snapshot & {
   palette?: string[]
   penWidth?: number
   penColor?: string
+  /** Named drawings: pen strokes grouped under one id. */
+  groups?: DrawingGroup[]
   /** ISO time of the last change; used to pick the newer copy when syncing. */
   updated?: string
 }
@@ -641,10 +819,21 @@ export const HELP = `BOARD
 CANVAS
   wb add sticky|text|document|kanban|arrow "Optional text"
   wb add link <task-id>               Ticket node; click it to open the ticket
+  wb list                             Every canvas item, arrow and drawing with its ID
+  link <from> <to> [style] ["label"]  Connect two items. Style: directed (default),
+                                      undirected, both, reverse  (or -> -- <-> <-)
+  unlink <a> <b>                      Remove the connection between two items
+  ends <arrow-id> <start> <end>       Line ends: none arrow dot diamond
+  wb name <drawing-id> "Name"         Name a group of pen strokes
 VIEWS
   cd <view>  (tab <view>)             terminal board canvas stats inbox history settings
-  split <view>|off                    Show a second view beside this one
+  vsplit [view]                       Split side by side; no view asks what to open
+  hsplit [view]                       Split top and bottom
+  close <view> · only                 Close a pane · keep only this one
+                                      Views also answer to whiteboard, statistics,
+                                      incoming, customize, tasks, notes
 HISTORY
+  undo · redo                         Step back and forward (Ctrl+Z · Ctrl+Shift+Z)
   checkpoint "Description"            Save a restore point
   log                                 List restore points
   revert <checkpoint-id>              Restore one (asks Y/N)
@@ -662,6 +851,8 @@ KEYS
   Home/End   start / end of line (Ctrl+A/E in bash and zsh) · Alt+←/→ by word
   Ctrl+U/K   cut to start / end of line · Ctrl+Backspace cut a word
   Ctrl+\`     jump to the prompt · Ctrl+Y terminal window
+  Ctrl+\\     split side by side · Ctrl+Shift+\\ split top and bottom (V / H outside text)
+  F6         next pane (Shift+F6 previous) · X closes a pane (outside text)
 Quote names with spaces. IDs can be unique prefixes.`
 export type View =
   | "terminal"
@@ -686,11 +877,38 @@ export const THEMES: Record<string, string> = {
   amber: "#ffbf69",
   violet: "#c4a1ff",
 }
+/** Other names people use for the views, e.g. `vsplit whiteboard`. */
+const VIEW_ALIASES: Record<string, View> = {
+  term: "terminal",
+  shell: "terminal",
+  tasks: "board",
+  kanban: "board",
+  taskboard: "board",
+  whiteboard: "canvas",
+  wb: "canvas",
+  notes: "canvas",
+  sticky: "canvas",
+  stickies: "canvas",
+  statistics: "stats",
+  incoming: "inbox",
+  customize: "settings",
+  customise: "settings",
+}
+/** The view a word names, or undefined. */
+export function resolveView(word: string | undefined): View | undefined {
+  const key = word?.toLowerCase() ?? ""
+  if (VIEWS.includes(key as View)) return key as View
+  return Object.hasOwn(VIEW_ALIASES, key) ? VIEW_ALIASES[key] : undefined
+}
 export type CommandResult = {
   workspace: Workspace
   output: string
   view?: View
-  split?: View | null
+  /** A change to the pane layout. A null view opens an empty pane that asks. */
+  pane?:
+    | { op: "split"; direction: "row" | "column"; view: View | null }
+    | { op: "close"; view: View }
+    | { op: "only" }
   confirm?: { type: "merge" | "revert"; id: string }
   clear?: boolean
   /** `cd`: go to a view without leaving the terminal. */
@@ -795,6 +1013,83 @@ export function execute(
       )
     return matches[0]
   }
+  const items = w.objects.filter((o) => o.kind !== "arrow")
+  const arrows = w.objects.filter((o) => o.kind === "arrow")
+  const item = (prefix: string | undefined, what = "canvas item") => {
+    if (!prefix) throw new Error(`Name a ${what} by its ID. \`wb list\` shows them.`)
+    return resolve(items, prefix)
+  }
+  if (verb === "link") {
+    // link <from> <to> [directed|undirected|both|reverse] ["label"]
+    const from = item(sub)
+    const to = item(args[0])
+    const style = args[1]?.toLowerCase()
+    const known = style !== undefined && Object.hasOwn(LINK_STYLES, style)
+    const label = args.slice(known ? 2 : 1).join(" ")
+    const ends = known ? LINK_STYLES[style] : LINK_STYLES.directed
+    return {
+      ...result(
+        linkItems(w, from.id, to.id, ends, label),
+        `${shortId(from.id)} ${linkSymbol(ends)} ${shortId(to.id)}${label ? `  "${label}"` : ""}`
+      ),
+    }
+  }
+  if (verb === "unlink") {
+    const a = item(sub)
+    const b = item(args[0])
+    return result(
+      unlinkItems(w, a.id, b.id),
+      `Disconnected ${shortId(a.id)} and ${shortId(b.id)}.`
+    )
+  }
+  if (verb === "ends") {
+    // ends <arrow-id> <start> <end>, or a named style: ends <arrow-id> both
+    if (!sub) throw new Error("Use ends <arrow-id> none|arrow|dot|diamond none|arrow|dot|diamond.")
+    const arrow = resolve(arrows, sub)
+    const style = args[0]?.toLowerCase()
+    const ends =
+      style !== undefined && Object.hasOwn(LINK_STYLES, style)
+        ? LINK_STYLES[style]
+        : LINE_ENDS.includes(args[0] as LineEnd) &&
+            LINE_ENDS.includes(args[1] as LineEnd)
+          ? { start: args[0] as LineEnd, end: args[1] as LineEnd }
+          : undefined
+    if (!ends)
+      throw new Error(
+        "Use ends <arrow-id> none|arrow|dot|diamond none|arrow|dot|diamond, or directed|undirected|both|reverse."
+      )
+    return result(
+      {
+        ...w,
+        objects: w.objects.map((o) => (o.id === arrow.id ? { ...o, ends } : o)),
+      },
+      `Arrow ${shortId(arrow.id)}: ${linkSymbol(ends)}`
+    )
+  }
+  if (verb === "wb" && sub === "list") {
+    const groups = drawingGroups(w)
+    const lines = [
+      ...items.map((o) => `${shortId(o.id)}  ${describeObject(o, w)}`),
+      ...arrows.map((o) => {
+        const end = (id?: string) => (id ? shortId(id) : "(loose)")
+        return `${shortId(o.id)}  arrow: ${end(o.from?.objectId)} ${linkSymbol(lineEnds(o))} ${end(o.to?.objectId)}${o.text ? `  "${o.text}"` : ""}`
+      }),
+      ...groups.map(
+        (g) =>
+          `${shortId(g.id)}  drawing: ${g.name} (${g.strokes.length} stroke${g.strokes.length === 1 ? "" : "s"})`
+      ),
+    ]
+    return result(
+      w,
+      lines.join("\n") || 'The canvas is empty. Try wb add sticky "Idea".'
+    )
+  }
+  if (verb === "wb" && sub === "name") {
+    const group = resolve(drawingGroups(w), args[0] ?? "")
+    const name = args.slice(1).join(" ").trim()
+    if (!name) throw new Error('Use wb name <drawing-id> "Name".')
+    return result(nameGroup(w, group.id, name), `Drawing ${shortId(group.id)} is now "${name}".`)
+  }
   if (verb === "wb" && sub === "add") {
     const aliases: Record<string, WhiteboardObject["kind"]> = {
       sticky: "sticky",
@@ -846,15 +1141,43 @@ export function execute(
   if (verb === "help" || verb === "man" || verb === "?") return result(w, HELP)
   if (verb === "clear" || verb === "cls")
     return { ...result(w, ""), clear: true }
-  if (verb === "tab" && VIEWS.includes(sub as View))
-    return { ...result(w, `Opened ${sub}.`), view: sub as View }
+  if (verb === "tab" && resolveView(sub))
+    return { ...result(w, `Opened ${resolveView(sub)}.`), view: resolveView(sub) }
   if (verb === "cd") {
     // Views are the directories of this shell; the terminal is home.
-    const target = !sub || /^(~|\/|\\|\.\.)$/.test(sub) ? "terminal" : sub
-    if (!VIEWS.includes(target as View))
+    const target =
+      !sub || /^(~|\/|\\|\.\.)$/.test(sub) ? "terminal" : resolveView(sub)
+    if (!target)
       throw new Error(`cd: no such view: ${sub}. Views: ${VIEWS.join(" ")}.`)
-    return { ...result(w, ""), go: target as View }
+    return { ...result(w, ""), go: target }
   }
+  // vsplit draws a vertical divider (side by side), hsplit a horizontal one
+  // (stacked), as in vim. `split` is the older name for vsplit.
+  if (verb === "vsplit" || verb === "hsplit" || verb === "split") {
+    if (verb === "split" && sub === "off")
+      return { ...result(w, "Closed the other panes."), pane: { op: "only" } }
+    const view = sub ? resolveView(sub) : null
+    if (view === undefined)
+      throw new Error(
+        `${verb}: no such view: ${sub}. Views: ${VIEWS.join(" ")}.`
+      )
+    return {
+      ...result(w, ""),
+      pane: {
+        op: "split",
+        direction: verb === "hsplit" ? "column" : "row",
+        view,
+      },
+    }
+  }
+  if (verb === "close") {
+    const view = resolveView(sub)
+    if (!view)
+      throw new Error(`Use close <view>. Views: ${VIEWS.join(" ")}.`)
+    return { ...result(w, ""), pane: { op: "close", view } }
+  }
+  if (verb === "only")
+    return { ...result(w, ""), pane: { op: "only" } }
   if (verb === "board" || verb === "ls" || verb === "dir")
     return result(w, boardText(w))
   if (verb === "stats") return result(w, statsText(w))
@@ -899,11 +1222,6 @@ export function execute(
         .map((l) => `${l.name.padEnd(20)} ${l.scope.padEnd(7)} ${l.color}`)
         .join("\n") || 'No labels yet. Try label new "Name" global.'
     )
-  if (verb === "split" && (sub === "off" || VIEWS.includes(sub as View)))
-    return {
-      ...result(w, `Split ${sub}.`),
-      split: sub === "off" ? null : (sub as View),
-    }
   if (verb === "theme" && THEMES[sub])
     return result({ ...w, theme: sub, accent: THEMES[sub] }, `Theme: ${sub}.`)
   if (verb === "checkpoint" && sub)

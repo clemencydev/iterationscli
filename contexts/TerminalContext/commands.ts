@@ -136,6 +136,34 @@ export const WorkspaceCommands: Record<string, Command> = {
       local("arrow", "Arrow", [text("label")]),
       local("link", "Ticket link node", [task]),
     ]),
+    local("list", "List canvas items, arrows and drawings with their IDs"),
+    local("name", "Name a drawing (a group of pen strokes)", [
+      { name: "drawing-id", descriprion: "<drawing-id>", source: "drawing" },
+      text("name"),
+    ]),
+  ]),
+  link: local("link", "Connect two canvas items with an arrow", [
+    { name: "from", descriprion: "<from-id>", source: "object" },
+    { name: "to", descriprion: "<to-id>", source: "object" },
+    {
+      name: "style",
+      descriprion: "[directed|undirected|both|reverse]",
+      values: ["directed", "undirected", "both", "reverse"],
+    },
+    text("label"),
+  ]),
+  unlink: local("unlink", "Remove the connection between two canvas items", [
+    { name: "a", descriprion: "<id>", source: "object" },
+    { name: "b", descriprion: "<id>", source: "object" },
+  ]),
+  ends: local("ends", "Change what an arrow draws at each end", [
+    { name: "arrow-id", descriprion: "<arrow-id>", source: "arrow" },
+    {
+      name: "start",
+      descriprion: "<start>",
+      values: ["none", "arrow", "dot", "diamond", "directed", "undirected", "both", "reverse"],
+    },
+    { name: "end", descriprion: "<end>", values: ["none", "arrow", "dot", "diamond"] },
   ]),
   board: local("board", "Print the board: columns and their tasks"),
   ls: local("ls", "Print the board (same as board)"),
@@ -145,9 +173,21 @@ export const WorkspaceCommands: Record<string, Command> = {
   inbox: local("inbox", "List incoming proposals"),
   cd: local("cd", "Go to a view", [{ name: "view", descriprion: "<view>", values: VIEW_NAMES }]),
   tab: local("tab", "Open a view", [{ name: "view", descriprion: "<view>", values: VIEW_NAMES }]),
-  split: local("split", "Show a second view beside this one", [
+  vsplit: local("vsplit", "Split side by side (no view: ask what to open)", [
+    { name: "view", descriprion: "[view]", values: VIEW_NAMES },
+  ]),
+  hsplit: local("hsplit", "Split top and bottom (no view: ask what to open)", [
+    { name: "view", descriprion: "[view]", values: VIEW_NAMES },
+  ]),
+  split: local("split", "Same as vsplit; split off closes the other panes", [
     { name: "view", descriprion: "<view>|off", values: [...VIEW_NAMES, "off"] },
   ]),
+  close: local("close", "Close the pane showing a view", [
+    { name: "view", descriprion: "<view>", values: VIEW_NAMES },
+  ]),
+  only: local("only", "Close every pane but this one"),
+  undo: local("undo", "Undo the last change (Ctrl+Z)"),
+  redo: local("redo", "Redo what was undone (Ctrl+Shift+Z)"),
   theme: local("theme", "Switch the accent palette", [
     { name: "theme", descriprion: "<theme>", values: ["original", "phosphor", "amber", "violet"] },
   ]),

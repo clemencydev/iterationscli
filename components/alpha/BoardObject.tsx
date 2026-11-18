@@ -1,9 +1,11 @@
 "use client"
 import { useRef, type CSSProperties, type PointerEvent } from "react"
 import {
+  lineEnds,
   nearestSide,
   STICKY_COLORS,
   TEXT_SIZES,
+  type LineEnd,
   type WhiteboardObject,
   type Task,
 } from "@/lib/alpha"
@@ -148,9 +150,44 @@ export default function BoardObject({
     const angle = Math.atan2(item.height, item.width),
       x2 = item.x + item.width,
       y2 = item.y + item.height
-    const head = [0.5, -0.5].map(
-      (a) => `${x2 - 16 * Math.cos(angle + a)},${y2 - 16 * Math.sin(angle + a)}`
-    )
+    const ends = lineEnds(item)
+    // What sits at one end of the line: `out` is the direction the line
+    // leaves that end in, so the marker points away from the other end.
+    const marker = (kind: LineEnd, x: number, y: number, out: number) => {
+      const at = (along: number, across: number) =>
+        `${x - along * Math.cos(out) + across * Math.sin(out)},${y - along * Math.sin(out) - across * Math.cos(out)}`
+      if (kind === "arrow")
+        return (
+          <polyline
+            points={`${at(14, 7)} ${x},${y} ${at(14, -7)}`}
+            fill="none"
+            stroke="var(--foreground)"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ pointerEvents: "none" }}
+          />
+        )
+      if (kind === "dot")
+        return (
+          <circle
+            cx={x}
+            cy={y}
+            r="6"
+            fill="var(--foreground)"
+            style={{ pointerEvents: "none" }}
+          />
+        )
+      if (kind === "diamond")
+        return (
+          <polygon
+            points={`${x},${y} ${at(9, 6)} ${at(18, 0)} ${at(9, -6)}`}
+            fill="var(--foreground)"
+            style={{ pointerEvents: "none" }}
+          />
+        )
+      return null
+    }
     return (
       <g
         className={styles.arrowObject}
@@ -177,15 +214,8 @@ export default function BoardObject({
           strokeLinecap="round"
           style={{ pointerEvents: "none" }}
         />
-        <polyline
-          points={`${head[0]} ${x2},${y2} ${head[1]}`}
-          fill="none"
-          stroke="var(--foreground)"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ pointerEvents: "none" }}
-        />
+        {marker(ends.end, x2, y2, angle)}
+        {marker(ends.start, item.x, item.y, angle + Math.PI)}
         {(["start", "end"] as const).map((end, i) => (
           <circle
             key={end}

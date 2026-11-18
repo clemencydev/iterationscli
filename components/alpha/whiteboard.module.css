@@ -827,3 +827,47 @@
     transition: none;
   }
 }
+
+/* ---- Keyboard selection, connecting and drawings (selection panel) ---- */
+.idBadge {
+  fill: var(--alpha-accent);
+  font-family: var(--font-mono), monospace;
+  pointer-events: none;
+  user-select: none;
+}
+.linking {
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px dashed var(--alpha-accent);
+  color: var(--foreground);
+}
+.linking code {
+  color: var(--alpha-accent);
+}
+.linking > div,
+.groupForm > div,
+.endControls > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.endControls {
+  margin: 8px 0;
+}
+.selectionPanel .endControls label {
+  grid-template-columns: 40px 1fr;
+  align-items: center;
+  margin: 8px 0 0;
+}
+.groupForm {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.groupForm input {
+  width: 100%;
+}

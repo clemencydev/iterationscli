@@ -83,4 +83,38 @@ elsewhere. `shell powershell|bash|zsh|auto` overrides that per device.
   and syntax colouring are pure functions in `lib/shell.ts`; completion is
   `lib/completion.ts`, driven by the command registry in
   `contexts/TerminalContext/commands.ts`. A command added to the registry
-  completes and colours for free.
+  completes and colours for free. The landing-page terminal (Ctrl+Y on `/`)
+  is the same component.
+
+## Workspace layout and keys
+
+The views are tiled in panes (`lib/panes.ts`, `components/alpha/Panes.tsx`);
+each view is on screen at most once, and the layout is remembered per device.
+
+- **Split**: drag a view from the sidebar, a tab or a pane's bar onto a pane.
+  An edge splits it that way, the centre replaces it. Or `vsplit [view]`
+  (side by side) and `hsplit [view]` (top and bottom) in the terminal, or
+  Ctrl+\ and Ctrl+Shift+\ (V and H outside text fields). Without a view the
+  new pane asks what to open. `close <view>` and `only` take panes away.
+- **Resize**: drag the divider between two panes, or focus it and use the
+  arrow keys; double-click evens it out.
+- **Move around**: F6 goes to the next pane, X closes the one you are in.
+- **Arrow keys select instead of scrolling**: on the task board they walk the
+  tickets (Enter opens, Space completes, Shift+←/→ moves a column); on the
+  canvas they walk the items and show the selected item's ID.
+- **Undo and redo**: Ctrl+Z and Ctrl+Shift+Z anywhere outside a text field,
+  or `undo` / `redo` in the terminal. Ctrl+Y stays the terminal window.
+
+## Canvas connections and drawings
+
+- `link <from> <to> [directed|undirected|both|reverse] ["label"]` connects two
+  canvas items by ID; Tab lists the candidates with what they are, and
+  `wb list` prints every item, arrow and drawing. `unlink <a> <b>` removes a
+  connection and `ends <arrow-id> <start> <end>` sets the line ends (`none`,
+  `arrow`, `dot`, `diamond`).
+- On the canvas: select an item, press L, move to another with the arrow
+  keys and press Enter. Selecting two items offers "Connect"; selecting an
+  arrow offers its ends.
+- Several pen strokes linked to a ticket together become one named drawing
+  with one ID, so the ticket lists it once. Name or ungroup it from the
+  selection panel, or with `wb name <drawing-id> "Name"`.

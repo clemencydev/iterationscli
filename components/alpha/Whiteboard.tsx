@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -9,8 +10,21 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react"
-import type { Stroke, WhiteboardObject, Task } from "@/lib/alpha"
-import { resolveArrow, objectAt, PEN_WIDTHS } from "@/lib/alpha"
+import type {
+  DrawingGroup,
+  LineEnd,
+  Stroke,
+  WhiteboardObject,
+  Task,
+} from "@/lib/alpha"
+import {
+  LINE_ENDS,
+  LINK_STYLES,
+  lineEnds,
+  resolveArrow,
+  objectAt,
+  PEN_WIDTHS,
+} from "@/lib/alpha"
 import BoardObject from "./BoardObject"
 import BoardIcon, { type BoardIconName } from "./BoardIcon"
 import styles from "./whiteboard.module.css"
@@ -21,10 +35,21 @@ import {
   selectionBox,
   strokeHit,
   moveItems,
+  neighbour,
+  objectBox,
+  withGroups,
   type Box,
   type CanvasSelection,
+  type Direction,
   type SelectionAction,
 } from "@/lib/canvas-selection"
+
+const ARROW_KEYS: Record<string, Direction> = {
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+}
 
 const CREATE: [WhiteboardObject["kind"], string, string][] = [
   ["sticky", "Sticky", "Add a sticky note"],
@@ -67,7 +92,13 @@ export default function Whiteboard({
   onSize,
   onSelectionAction,
   focusItem,
+  groups,
+  onConnect,
 }: {
+  /** Named drawings: pen strokes that are selected and referred to as one. */
+  groups: DrawingGroup[]
+  /** Draw an arrow from one item to another. */
+  onConnect: (from: string, to: string) => void
   strokes: Stroke[]
   notes: string
   /** Current pen color. */
@@ -104,7 +135,12 @@ export default function Whiteboard({
   const [tool, setTool] = useState<"select" | "pen" | "hand" | "eraser">(
     "select"
   )
-  const [chosen, setChosen] = useState<CanvasSelection>(emptySelection)
+  const [picked, setChosen] = useState<CanvasSelection>(emptySelection)
+  // Picking one stroke of a drawing picks the whole drawing.
+  const chosen = useMemo(() => withGroups(strokes, picked), [strokes, picked])
+  /** Item a connection is being drawn from, while its other end is chosen. */
+  const [linkFrom, setLinkFrom] = useState<string | null>(null)
+  const [groupName, setGroupName] = useState("")
   const [marquee, setMarquee] = useState<Box | null>(null)
   const [offset, setOffset] = useState({ dx: 0, dy: 0 })
   const [erased, setErased] = useState<string[]>([])
@@ -129,9 +165,10 @@ export default function Whiteboard({
         objects: objects.some((o) => o.id === focusItem.id)
           ? [focusItem.id]
           : [],
-        strokes: strokes.some((s) => s.id === focusItem.id)
-          ? [focusItem.id]
-          : [],
+        // A drawing's id stands for all of its strokes.
+        strokes: strokes
+          .filter((s) => s.id === focusItem.id || s.group === focusItem.id)
+          .map((s) => s.id),
       }
       const box = selectionBox(objects, strokes, selected),
         rect = svg.current?.getBoundingClientRect()
@@ -265,6 +302,54 @@ export default function Whiteboard({
     })
   }
 
+  /** The one object selected, when the selection is exactly that. */
+  const single =
+    chosen.objects.length === 1 && !chosen.strokes.length
+      ? objects.find((o) => o.id === chosen.objects[0])
+      : undefined
+  const linkSource = objects.find((o) => o.id === linkFrom)
+  /** The item a connection being drawn would end on. */
+  const linkTarget =
+    linkSource && single && single.kind !== "arrow" && single.id !== linkFrom
+      ? single
+      : undefined
+  /** The two items a selection of exactly two would connect. */
+  const pair =
+    chosen.objects.length === 2 && !chosen.strokes.length
+      ? objects.filter(
+          (o) => chosen.objects.includes(o.id) && o.kind !== "arrow"
+        )
+      : []
+  /** The drawing the selected strokes are, when they are exactly one. */
+  const drawing = groups.find((g) => {
+    const members = strokes.filter((s) => s.group === g.id)
+    return (
+      members.length > 0 &&
+      members.length === chosen.strokes.length &&
+      members.every((s) => chosen.strokes.includes(s.id))
+    )
+  })
+  /** Selects one item and brings it into view if it is off screen. */
+  function select(id: string) {
+    setChosen({ objects: [id], strokes: [] })
+    setTool("select")
+    const item = objects.find((o) => o.id === id)
+    const rect = svg.current?.getBoundingClientRect()
+    if (!item || !rect) return
+    const box = objectBox(item, objects)
+    const x = (box.x + box.width / 2) * camera.zoom + camera.x
+    const y = (box.y + box.height / 2) * camera.zoom + camera.y
+    if (x < 60 || y < 60 || x > rect.width - 60 || y > rect.height - 60)
+      setCamera((c) => ({
+        ...c,
+        x: rect.width / 2 - (box.x + box.width / 2) * c.zoom,
+        y: rect.height / 2 - (box.y + box.height / 2) * c.zoom,
+      }))
+  }
+  function connect(from: string, to: string) {
+    onConnect(from, to)
+    setLinkFrom(null)
+  }
   const saved = palette.includes(color.toLowerCase())
   const target = objects.find((o) => o.id === connectTarget)
   const toolButton = (
@@ -293,8 +378,13 @@ export default function Whiteboard({
           )
         )
           return
+        // A focused handle that used the key (to nudge an item) keeps it.
+        if (e.isDefaultPrevented() || e.ctrlKey || e.metaKey || e.altKey)
+          return
         if (e.key === "Escape") {
-          setChosen(emptySelection())
+          // Esc backs out one step: a connection being drawn, then the selection.
+          if (linkFrom) setLinkFrom(null)
+          else setChosen(emptySelection())
           setMarquee(null)
         }
         if (
@@ -305,11 +395,32 @@ export default function Whiteboard({
           onSelectionAction(chosen, { type: "delete" })
           setChosen(emptySelection())
         }
+        // The arrow keys walk the selection from item to item (they do not
+        // scroll): each press goes to the nearest item in that direction.
+        const direction = ARROW_KEYS[e.key]
+        if (direction) {
+          e.preventDefault()
+          const rect = svg.current?.getBoundingClientRect()
+          const next = neighbour(objects, single?.id, direction, {
+            x: ((rect?.width ?? 0) / 2 - camera.x) / camera.zoom,
+            y: ((rect?.height ?? 0) / 2 - camera.y) / camera.zoom,
+          })
+          if (next) select(next)
+        }
+        if (e.key.toLowerCase() === "l" && single && single.kind !== "arrow") {
+          e.preventDefault()
+          setLinkFrom(single.id)
+        }
+        if (e.key === "Enter" && linkTarget) {
+          e.preventDefault()
+          connect(linkFrom!, linkTarget.id)
+        }
       }}
     >
       <svg
         ref={svg}
         tabIndex={0}
+        data-keys
         className={styles.surface}
         style={{
           cursor:
@@ -498,7 +609,37 @@ export default function Whiteboard({
               stroke="var(--primary)"
               strokeWidth={1.5 / camera.zoom}
               strokeDasharray={`${6 / camera.zoom} ${4 / camera.zoom}`}
-              style={{ cursor: "move", touchAction: "none" }}
+              // One item keeps its own handles and text usable while selected.
+              style={{
+                cursor: "move",
+                touchAction: "none",
+                pointerEvents: single ? "none" : undefined,
+              }}
+            />
+          )}
+          {selectedBounds && !marquee && tool === "select" && (
+            // The ID to use in the terminal, e.g. `link a1b2c3d4 …`.
+            <text
+              className={styles.idBadge}
+              x={selectedBounds.x - 6 / camera.zoom}
+              y={selectedBounds.y - 12 / camera.zoom}
+              fontSize={11 / camera.zoom}
+            >
+              {single
+                ? `${single.kind} · ${single.id.slice(0, 8)}`
+                : drawing
+                  ? `${drawing.name} · ${drawing.id.slice(0, 8)}`
+                  : `${selectedItems.length} items`}
+            </text>
+          )}
+          {linkSource && (
+            <rect
+              className={styles.connectTarget}
+              x={objectBox(linkSource, objects).x - 6 / camera.zoom}
+              y={objectBox(linkSource, objects).y - 6 / camera.zoom}
+              width={objectBox(linkSource, objects).width + 12 / camera.zoom}
+              height={objectBox(linkSource, objects).height + 12 / camera.zoom}
+              strokeWidth={2 / camera.zoom}
             />
           )}
           {marquee && (
@@ -592,7 +733,122 @@ export default function Whiteboard({
               ×
             </button>
           </div>
-          <p>Drag the outlined group to move. Locked items stay in place.</p>
+          <p>
+            ← ↑ ↓ → move the selection · drag the outline to move the items.
+          </p>
+          {/* ---- Connecting: from the keyboard (L, arrows, Enter) or here ---- */}
+          {linkSource && (
+            <div className={styles.linking} role="status">
+              Connecting from <code>{linkSource.id.slice(0, 8)}</code>.{" "}
+              {linkTarget
+                ? "Press Enter to connect to this item."
+                : "Select the item to connect to (arrow keys), then Enter."}
+              <div>
+                {linkTarget && (
+                  <button onClick={() => connect(linkSource.id, linkTarget.id)}>
+                    Connect ↵
+                  </button>
+                )}
+                <button onClick={() => setLinkFrom(null)}>Cancel (Esc)</button>
+              </div>
+            </div>
+          )}
+          {!linkSource && single && single.kind !== "arrow" && (
+            <button
+              onClick={() => setLinkFrom(single.id)}
+              title="Then select another item and press Enter"
+            >
+              Connect from here (L)
+            </button>
+          )}
+          {!linkSource && pair.length === 2 && (
+            <button onClick={() => connect(pair[0].id, pair[1].id)}>
+              Connect {pair[0].id.slice(0, 4)} → {pair[1].id.slice(0, 4)}
+            </button>
+          )}
+          {/* ---- An arrow's ends: directed, undirected, both ways, markers ---- */}
+          {single?.kind === "arrow" && (
+            <div className={styles.endControls}>
+              <div>
+                {(
+                  [
+                    ["directed", "A → B"],
+                    ["undirected", "A — B"],
+                    ["both", "A ↔ B"],
+                    ["reverse", "A ← B"],
+                  ] as const
+                ).map(([style, label]) => (
+                  <button
+                    key={style}
+                    title={style}
+                    aria-pressed={
+                      lineEnds(single).start === LINK_STYLES[style].start &&
+                      lineEnds(single).end === LINK_STYLES[style].end
+                    }
+                    onClick={() =>
+                      onObjectChange(single.id, { ends: LINK_STYLES[style] })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {(["start", "end"] as const).map((side) => (
+                <label key={side}>
+                  {side === "start" ? "Start" : "End"}
+                  <select
+                    value={lineEnds(single)[side]}
+                    onChange={(e) =>
+                      onObjectChange(single.id, {
+                        ends: {
+                          ...lineEnds(single),
+                          [side]: e.target.value as LineEnd,
+                        },
+                      })
+                    }
+                  >
+                    {LINE_ENDS.map((end) => (
+                      <option key={end}>{end}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          )}
+          {/* ---- Pen strokes as one named drawing ---- */}
+          {chosen.strokes.length > 0 && (
+            <form
+              className={styles.groupForm}
+              onSubmit={(e) => {
+                e.preventDefault()
+                onSelectionAction(chosen, { type: "group", name: groupName })
+                setGroupName("")
+              }}
+            >
+              <strong>
+                {drawing
+                  ? `Drawing · ${drawing.id.slice(0, 8)}`
+                  : `${chosen.strokes.length} pen stroke${chosen.strokes.length === 1 ? "" : "s"}`}
+              </strong>
+              <input
+                aria-label="Drawing name"
+                placeholder={drawing ? drawing.name : "Name this drawing…"}
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
+              />
+              <div>
+                <button>{drawing ? "Rename" : "Group as one drawing"}</button>
+                {drawing && (
+                  <button
+                    type="button"
+                    onClick={() => onSelectionAction(chosen, { type: "ungroup" })}
+                  >
+                    Ungroup
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
           <button
             onClick={() => {
               onSelectionAction(chosen, { type: "delete" })
@@ -664,11 +920,24 @@ export default function Whiteboard({
             <button>Add comment to selection</button>
           </form>
           <div className={styles.selectionDetails}>
-            {selectedItems.map((item) => (
+            {selectedItems
+              // A drawing is listed once, not once per stroke.
+              .filter(
+                (item, i, all) =>
+                  "kind" in item ||
+                  !item.group ||
+                  all.findIndex(
+                    (other) => !("kind" in other) && other.group === item.group
+                  ) === i
+              )
+              .map((item) => (
               <div key={item.id}>
                 <strong>
-                  {"kind" in item ? item.kind : "Drawing"} ·{" "}
-                  {item.id.slice(0, 6)}
+                  {"kind" in item
+                    ? `${item.kind} · ${item.id.slice(0, 8)}`
+                    : item.group
+                      ? `${groups.find((g) => g.id === item.group)?.name ?? "Drawing"} · ${item.group.slice(0, 8)}`
+                      : `Pen stroke · ${item.id.slice(0, 8)}`}
                 </strong>
                 {item.taskId && (
                   <p>
@@ -832,11 +1101,11 @@ export default function Whiteboard({
           : tool === "pen"
             ? "Drag to draw"
             : tool === "select"
-              ? "Drag to select · drag outline to move · Delete removes selection"
+              ? "Arrow keys or drag to select · L then Enter connects · Delete removes"
               : tool === "eraser"
                 ? "Drag to erase pen strokes"
                 : "Drag to pan"}{" "}
-        · Drop an arrow end on an item to connect · Ctrl+Y terminal
+        · Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+Y terminal
       </div>
     </section>
   )

@@ -1,0 +1,217 @@
+/* The tiling layout (Panes.tsx): splits, the dividers between them, and the
+   frame around each pane. Colours come from the workspace shell's variables
+   (--line, --dim, --surface, --alpha-accent). */
+.root {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.split[data-direction="column"] {
+  flex-direction: column;
+}
+/* Each side takes its share through flex-grow (set inline) from a zero basis,
+   so the ratio is exact whatever the content wants. */
+.side {
+  display: flex;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- Divider ---- */
+.divider {
+  position: relative;
+  flex: 0 0 5px;
+  background: var(--line);
+  background-clip: content-box;
+  padding: 0 2px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 2;
+  transition: background-color 0.12s;
+}
+.divider[data-direction="column"] {
+  padding: 2px 0;
+  cursor: row-resize;
+}
+.divider:hover,
+.divider:active,
+.divider:focus-visible {
+  background-color: var(--alpha-accent);
+  outline: none;
+}
+/* A wider invisible grip, so the thin line is easy to catch. */
+.divider::after {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+.divider[data-direction="column"]::after {
+  inset: -4px 0;
+}
+
+/* ---- Pane frame ---- */
+.frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  outline: none;
+}
+.body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  cursor: grab;
+  user-select: none;
+}
+.frame[data-focused] > .bar {
+  color: var(--foreground);
+  box-shadow: inset 0 2px 0 var(--alpha-accent);
+}
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.root .bar button {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+}
+.root .bar button:hover {
+  background: var(--hover);
+  color: var(--foreground);
+}
+
+/* Where a dragged view will land: half the pane for an edge, all of it for
+   the centre. */
+.drop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--alpha-accent) 22%, transparent);
+  border: 2px solid var(--alpha-accent);
+  transition: inset 0.08s;
+}
+.drop[data-zone="left"] {
+  right: 50%;
+}
+.drop[data-zone="right"] {
+  left: 50%;
+}
+.drop[data-zone="top"] {
+  bottom: 50%;
+}
+.drop[data-zone="bottom"] {
+  top: 50%;
+}
+
+/* ---- Empty pane ---- */
+.chooser {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 4px;
+  flex: 1;
+  width: min(360px, 100%);
+  margin: 0 auto;
+  padding: 24px 18px;
+}
+.root .chooser h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.root .chooser button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+}
+.root .chooser button:hover,
+.root .chooser button:focus-visible {
+  background: var(--hover);
+  border-color: var(--alpha-accent);
+  outline: none;
+}
+.chooser kbd {
+  flex: 0 0 18px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--dim);
+  text-align: center;
+  border: 1px solid var(--line);
+}
+.chooser small {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 10px;
+}
+.root .chooser p {
+  margin: 12px 0 0;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+/* On a phone there is no room for side-by-side panes or dividers: every
+   pane becomes a section of one scrolling column. */
+@media (max-width: 760px) {
+  .root {
+    overflow-y: auto;
+  }
+  .split,
+  .split[data-direction] {
+    flex-direction: column;
+    flex: none;
+    width: 100%;
+  }
+  .side {
+    flex: none !important;
+    overflow: visible;
+  }
+  .divider {
+    display: none;
+  }
+  .split .frame {
+    flex: none;
+    height: 70dvh;
+  }
+}
