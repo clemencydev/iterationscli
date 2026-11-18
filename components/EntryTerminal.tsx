@@ -19,6 +19,7 @@ import { ENTRY_COMMANDS, parseEntryCommand } from "@/lib/entry-terminal"
 import { Commands } from "@/contexts/TerminalContext/commands"
 import { useCompletion } from "@/hooks/use-completion"
 import type { CompletionCommand } from "@/lib/completion"
+import { detectShell, entryPrompt, isShell } from "@/lib/shell"
 import styles from "./entry-terminal.module.css"
 
 const SHELL_COMMANDS: [string, string][] = [
@@ -40,6 +41,22 @@ export default function EntryTerminal({
 }) {
   const { user, checkSession } = useAuthenticate()
   const router = useRouter()
+  // The prompt of the visitor's own shell (or the one they chose in the
+  // workspace). This dialog only opens in the browser, so reading it here is safe.
+  const [promptLabel] = useState(() => {
+    let chosen: string | null = null
+    try {
+      chosen = window.localStorage.getItem("iterations:shell")
+    } catch {
+      // Fall back to the device's shell.
+    }
+    return entryPrompt(
+      isShell(chosen)
+        ? chosen
+        : detectShell(navigator.platform || navigator.userAgent),
+      "guest"
+    )
+  })
   const [input, setInput] = useState("")
   const [output, setOutput] = useState<string[]>([
     "IterationsCLI [alpha 0.1.0]",
@@ -112,7 +129,7 @@ export default function EntryTerminal({
       setMenu(false)
       return
     }
-    write(`PS iterations:\\> ${command}`)
+    write(`${promptLabel} ${command}`)
     if (command === "exit") {
       close()
       return
@@ -445,7 +462,7 @@ export default function EntryTerminal({
               else if (menu) void run(options[active].command)
             }}
           >
-            <label htmlFor="entry-command">PS iterations:\&gt;</label>
+            <label htmlFor="entry-command">{promptLabel}</label>
             <div className={styles.field}>
               <div className={styles.ghost} aria-hidden="true">
                 <span>{input}</span>

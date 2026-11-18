@@ -623,7 +623,46 @@ export function parseProposals(raw: string, w: Workspace): Proposal[] {
     }
   })
 }
-export const HELP = `wb add sticky|kanban|arrow|document|text "Optional text"\nwb add link <task-id>  (ticket node; click it to open the ticket in a split)\ntask new "Your task"\ntask list\ntask done <id> | task reopen <id>\ntask move <id> "Column"\ntask submit <id>\ntask delete <id>\ncolumn delete "Column" (moves tasks to first remaining column)\ncolumn new "Column"\ncolumn rename "Column" "New name"\nlabel new "Name" global|local [#hex]\nlabel color "Name" #hex\nlabel add <task-id> "Name"\ntab terminal|board|canvas|stats|inbox|history|settings\nsplit board|canvas|stats|terminal | split off\ntheme original|phosphor|amber|violet\ncheckpoint "Description"\nrevert <checkpoint-id>  (asks Y/N)\nmerge <proposal-id>  (asks Y/N)\nclear | help\nUse quoted names with spaces. IDs can be unique prefixes.\nTab completes · → accepts the suggestion · ↑/↓ recalls commands.`
+export const HELP = `BOARD
+  board (ls)                          Print the board: columns and their tasks
+  task new "Title"                    Create a task
+  task list                           List every task
+  find "text"                         Search task titles
+  task show <id>                      Print a ticket
+  task open <id>                      Open a ticket beside the current view
+  task done|reopen|submit <id>        Change its status
+  task move <id> "Column"             Move it to a column
+  task rename <id> "New title"        Rename it
+  task comment <id> "Text"            Add a comment
+  task delete <id>                    Delete it (undo from history)
+  column list|new|rename|delete       column rename "Column" "New name"
+  label list|new|add|color            label new "Name" global|local [#hex]
+                                      label add <task-id> "Name" · label color "Name" #hex
+CANVAS
+  wb add sticky|text|document|kanban|arrow "Optional text"
+  wb add link <task-id>               Ticket node; click it to open the ticket
+VIEWS
+  cd <view>  (tab <view>)             terminal board canvas stats inbox history settings
+  split <view>|off                    Show a second view beside this one
+HISTORY
+  checkpoint "Description"            Save a restore point
+  log                                 List restore points
+  revert <checkpoint-id>              Restore one (asks Y/N)
+  inbox                               List incoming proposals
+  merge <proposal-id>                 Merge one (asks Y/N)
+SHELL
+  stats                               Progress at a glance
+  theme original|phosphor|amber|violet
+  shell auto|powershell|bash|zsh      Change how this terminal looks
+  history · pwd · whoami · clear (cls) · exit · help
+KEYS
+  Tab        complete (again to cycle, Shift+Tab back) · → accepts the suggestion
+  ↑ / ↓      previous / next command · Ctrl+R search history
+  Ctrl+L     clear · Ctrl+C cancel · Esc clear the line
+  Home/End   start / end of line (Ctrl+A/E in bash and zsh) · Alt+←/→ by word
+  Ctrl+U/K   cut to start / end of line · Ctrl+Backspace cut a word
+  Ctrl+\`     jump to the prompt · Ctrl+Y terminal window
+Quote names with spaces. IDs can be unique prefixes.`
 export type View =
   | "terminal"
   | "board"
@@ -654,6 +693,83 @@ export type CommandResult = {
   split?: View | null
   confirm?: { type: "merge" | "revert"; id: string }
   clear?: boolean
+  /** `cd`: go to a view without leaving the terminal. */
+  go?: View
+  /** Task to open in a pane beside the current view. */
+  ticket?: string
+}
+
+const shortId = (id: string) => id.slice(0, 8)
+/** An ISO time as local "2026-11-18 14:05". */
+function day(iso: string) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const two = (n: number) => String(n).padStart(2, "0")
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`
+}
+function taskLine(w: Workspace, t: Task) {
+  const labels = t.labels
+    .map((id) => w.labels.find((l) => l.id === id)?.name)
+    .filter(Boolean)
+    .map((name) => ` #${name}`)
+    .join("")
+  return `${shortId(t.id)}  [${t.done ? "x" : " "}] ${t.title}${labels}`
+}
+/** The board as text: every column with its tasks. */
+export function boardText(w: Workspace) {
+  return w.columns
+    .map((column) => {
+      const tasks = w.tasks.filter((t) => t.column === column)
+      return [
+        `${column} (${tasks.length})`,
+        ...(tasks.length
+          ? tasks.map((t) => `  ${taskLine(w, t)}`)
+          : ["  (empty)"]),
+      ].join("\n")
+    })
+    .join("\n")
+}
+/** One ticket as text. */
+export function ticketText(w: Workspace, t: Task) {
+  const labels = t.labels
+    .map((id) => w.labels.find((l) => l.id === id)?.name)
+    .filter(Boolean)
+  const rows = [
+    ["Column", t.column],
+    [
+      "Status",
+      t.done
+        ? `done${t.completed ? ` (${day(t.completed)})` : ""}`
+        : "open",
+    ],
+    ["Submission", t.submission],
+    ["Labels", labels.length ? labels.join(", ") : "none"],
+    ["Created", day(t.created)],
+  ]
+  return [
+    `${shortId(t.id)}  ${t.title}`,
+    ...rows.map(([name, value]) => `  ${name.padEnd(11)}${value}`),
+    `  ${"Comments".padEnd(11)}${t.comments.length || "none"}`,
+    ...t.comments.map((comment, i) => `    ${i + 1}. ${comment}`),
+  ].join("\n")
+}
+/** Progress summary with a bar per column. */
+export function statsText(w: Workspace) {
+  const done = w.tasks.filter((t) => t.done).length
+  const total = w.tasks.length
+  const waiting = w.tasks.filter((t) => t.submission === "pending" && t.done)
+  const width = Math.max(...w.columns.map((c) => c.length), 6)
+  const most = Math.max(
+    1,
+    ...w.columns.map((c) => w.tasks.filter((t) => t.column === c).length)
+  )
+  return [
+    `${total} task${total === 1 ? "" : "s"} · ${done} done (${total ? Math.round((done / total) * 100) : 0}%) · ${waiting.length} awaiting submission`,
+    ...w.columns.map((column) => {
+      const count = w.tasks.filter((t) => t.column === column).length
+      return `  ${column.padEnd(width)}  [${"#".repeat(Math.round((count / most) * 20)).padEnd(20, ".")}] ${count}`
+    }),
+  ].join("\n")
 }
 export function execute(
   w: Workspace,
@@ -727,10 +843,62 @@ export function execute(
       view: "canvas",
     }
   }
-  if (verb === "help") return result(w, HELP)
-  if (verb === "clear") return { ...result(w, ""), clear: true }
+  if (verb === "help" || verb === "man" || verb === "?") return result(w, HELP)
+  if (verb === "clear" || verb === "cls")
+    return { ...result(w, ""), clear: true }
   if (verb === "tab" && VIEWS.includes(sub as View))
     return { ...result(w, `Opened ${sub}.`), view: sub as View }
+  if (verb === "cd") {
+    // Views are the directories of this shell; the terminal is home.
+    const target = !sub || /^(~|\/|\\|\.\.)$/.test(sub) ? "terminal" : sub
+    if (!VIEWS.includes(target as View))
+      throw new Error(`cd: no such view: ${sub}. Views: ${VIEWS.join(" ")}.`)
+    return { ...result(w, ""), go: target as View }
+  }
+  if (verb === "board" || verb === "ls" || verb === "dir")
+    return result(w, boardText(w))
+  if (verb === "stats") return result(w, statsText(w))
+  if (verb === "find") {
+    const needle = [sub, ...args].join(" ").trim().toLowerCase()
+    if (!needle) throw new Error('Use find "text".')
+    const found = w.tasks.filter((t) => t.title.toLowerCase().includes(needle))
+    return result(
+      w,
+      found.map((t) => `${taskLine(w, t)} · ${t.column}`).join("\n") ||
+        `No task matches "${needle}".`
+    )
+  }
+  if (verb === "log")
+    return result(
+      w,
+      [...w.commits]
+        .reverse()
+        .map((c) => `${shortId(c.id)}  ${day(c.date)}  ${c.message}`)
+        .join("\n") || 'No restore points yet. Try checkpoint "Description".'
+    )
+  if (verb === "inbox")
+    return result(
+      w,
+      w.proposals
+        .map((p) => `${p.id}  ${p.source}: ${p.title}`)
+        .join("\n") || "Nothing incoming."
+    )
+  if (verb === "column" && sub === "list")
+    return result(
+      w,
+      w.columns
+        .map(
+          (c) => `${c} (${w.tasks.filter((t) => t.column === c).length})`
+        )
+        .join("\n")
+    )
+  if (verb === "label" && sub === "list")
+    return result(
+      w,
+      w.labels
+        .map((l) => `${l.name.padEnd(20)} ${l.scope.padEnd(7)} ${l.color}`)
+        .join("\n") || 'No labels yet. Try label new "Name" global.'
+    )
   if (verb === "split" && (sub === "off" || VIEWS.includes(sub as View)))
     return {
       ...result(w, `Split ${sub}.`),
@@ -765,13 +933,26 @@ export function execute(
       return result(
         w,
         w.tasks
-          .map(
-            (t) =>
-              `${t.id.slice(0, 8)} [${t.done ? "x" : " "}] ${t.title} · ${t.column}`
-          )
+          .map((t) => `${taskLine(w, t)} · ${t.column}`)
           .join("\n") || 'No tasks yet. Try task new "Your first task".'
       )
     const task = resolve(w.tasks, args[0])
+    if (sub === "show") return result(w, ticketText(w, task))
+    if (sub === "open")
+      return { ...result(w, `Opened "${task.title}".`), ticket: task.id }
+    if (sub === "rename") {
+      const title = args.slice(1).join(" ").trim()
+      if (!title) throw new Error('Use task rename <id> "New title".')
+      return result(updateTask(w, task.id, { title }), "Task renamed.")
+    }
+    if (sub === "comment") {
+      const comment = args.slice(1).join(" ").trim()
+      if (!comment) throw new Error('Use task comment <id> "Text".')
+      return result(
+        updateTask(w, task.id, { comments: [...task.comments, comment] }),
+        "Comment added."
+      )
+    }
     if (sub === "delete")
       return result(
         deleteTask(w, task.id),

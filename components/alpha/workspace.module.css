@@ -561,208 +561,13 @@
   flex-shrink: 0;
 }
 
-/* ---- Terminal ---- */
-.terminal {
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-}
-.terminalHeading {
-  display: flex;
-  justify-content: space-between;
-  padding: 14px 28px;
-  color: var(--dim);
-  font-size: 10px;
-  letter-spacing: 0.5px;
-}
-.dots {
-  letter-spacing: 4px;
-  opacity: 0.6;
-}
-.terminalBody {
-  padding: 28px clamp(20px, 5vw, 72px) 20px;
-  flex: 1;
-}
-.ascii {
-  font-size: clamp(32px, 5vw, 64px);
-  font-weight: 700;
-  letter-spacing: -5px;
-  color: var(--alpha-accent);
-  margin: 0 0 28px;
-  line-height: 1.2;
-}
-.shell .terminalBody h1 {
-  margin-bottom: 8px;
-  min-height: 46px;
-}
-.cursor {
-  color: var(--alpha-accent);
-  font-size: 0.8em;
-  animation: blink 1.1s steps(1) infinite;
-}
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
-.quickStats {
-  display: flex;
-  gap: 32px;
-  padding: 20px 0;
-  margin: 20px 0 0;
-  border-top: 1px solid var(--line);
-  color: var(--dim);
-  font-size: 11px;
-}
-.quickStats b {
-  color: var(--foreground);
-  font-size: 20px;
-  margin-right: 5px;
-  font-weight: 400;
-}
-.quickCommands {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 28px;
-}
-.quickCommands button {
-  font-size: 11px;
-}
-.log {
-  font-size: 12px;
-  color: var(--dim);
-}
-.log pre,
+/* ---- Terminal ----
+   The terminal itself is ShellTerminal.tsx with its own stylesheet. */
 .help {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: inherit;
   margin: 6px 0;
-}
-.log .commandLine {
-  color: var(--foreground);
-  margin-top: 18px;
-}
-.log .errorLine {
-  color: var(--destructive);
-}
-.promptDock {
-  position: sticky;
-  bottom: 0;
-  background: var(--card);
-  border-top: 1px solid var(--line);
-}
-.suggestions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 22px;
-  border-bottom: 1px solid var(--line);
-  overflow-x: auto;
-  scrollbar-width: none;
-  font-size: 10px;
-  color: var(--dim);
-}
-.shell .suggestions button {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-shrink: 0;
-  padding: 3px 8px;
-  border-color: transparent;
-  background: transparent;
-  font-size: 11px;
-  max-width: 260px;
-}
-.suggestions button b {
-  font-weight: 500;
-  color: var(--foreground);
-}
-.suggestions button span {
-  color: var(--dim);
-  font-size: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.shell .suggestions button:first-child {
-  border-color: var(--line);
-}
-.shell .suggestions button:hover,
-.shell .suggestions button[aria-selected="true"] {
-  background: var(--accent);
-  border-color: var(--alpha-accent);
-}
-.suggestions button[aria-selected="true"] b {
-  color: var(--alpha-accent);
-}
-.suggestions > span {
-  flex-shrink: 0;
-  padding: 0 6px;
-}
-.suggestions kbd {
-  margin-left: auto;
-  flex-shrink: 0;
-  font: inherit;
-  font-size: 9px;
-  border: 1px solid var(--line);
-  padding: 1px 5px;
-}
-.prompt {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 22px;
-}
-.prompt label {
-  color: var(--alpha-accent);
-  white-space: nowrap;
-}
-.promptField {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  font-size: 12px;
-}
-.shell .promptField input {
-  flex: 1;
-  width: 100%;
-  background: transparent;
-  border: 0;
-  font-size: inherit;
-  padding: 5px 0;
-  outline: none;
-}
-/* Inline suggestion: an invisible copy of what was typed pushes the dimmed
-   remainder to the caret. */
-.ghost {
-  position: absolute;
-  inset: 0;
-  padding: 5px 0;
-  white-space: pre;
-  overflow: hidden;
-  pointer-events: none;
-  color: color-mix(in srgb, var(--dim) 70%, transparent);
-}
-.ghost span {
-  visibility: hidden;
-}
-.shell .prompt > button {
-  color: var(--alpha-accent);
-  padding: 4px 10px;
-}
-.reviewActions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px 22px;
-  border-top: 1px solid var(--line);
-  font-size: 11px;
 }
 
 /* ---- Views ---- */
@@ -1346,6 +1151,7 @@
   margin: auto;
   padding: 0;
   width: min(1020px, calc(100vw - 24px));
+  height: min(640px, 85dvh);
   max-height: 85dvh;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1389,20 +1195,6 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
-}
-.floatingTerminal .terminal,
-.dockedTerminal .terminal {
-  min-height: 0;
-  height: 100%;
-  flex: 1;
-  min-width: 0;
-}
-.floatingTerminal .terminalBody,
-.dockedTerminal .terminalBody {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-  max-height: none;
 }
 .dragTitlebar {
   cursor: move;
@@ -1456,17 +1248,6 @@
 .popupSidebar .navLabel {
   margin-top: 18px !important;
 }
-.terminalPopup .terminal {
-  min-height: 0;
-  overflow: auto;
-}
-.terminalPopup .terminalHeading {
-  padding: 10px 20px;
-}
-.terminalPopup .terminalBody {
-  padding: 8px 22px 12px;
-  min-height: 220px;
-}
 .popupHint {
   padding: 8px 20px;
   color: var(--dim);
@@ -1501,13 +1282,6 @@
   }
   .split .view {
     padding: 24px 18px;
-  }
-  .split .quickStats {
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .split .terminalBody {
-    padding: 24px;
   }
 }
 @media (max-width: 760px) {
@@ -1568,26 +1342,6 @@
   .view {
     padding: 22px 16px 32px;
   }
-  .terminalHeading {
-    padding: 12px 16px;
-    font-size: 9px;
-  }
-  .terminalBody {
-    padding: 22px 18px;
-  }
-  .shell .terminalBody h1 {
-    min-height: 66px;
-  }
-  .quickStats {
-    gap: 16px;
-  }
-  .prompt {
-    padding: 10px 12px;
-    gap: 8px;
-  }
-  .suggestions {
-    padding: 6px 12px;
-  }
   .panes.split {
     flex-direction: column;
     overflow: auto;
@@ -1621,9 +1375,6 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cursor {
-    animation: none;
-  }
   .shell button,
   .tab,
   .ticket {

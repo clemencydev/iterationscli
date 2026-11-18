@@ -63,6 +63,20 @@ import Whiteboard from "./Whiteboard"
 import { applySelection } from "@/lib/canvas-selection"
 import Menu from "./Menu"
 import TrendChart from "./TrendChart"
+import ShellTerminal, { type LogEntry } from "./ShellTerminal"
+import { useAuthenticate } from "@/hooks/use-authenticate"
+import {
+  banner,
+  builtin,
+  confirmPrompt,
+  detectShell,
+  isShell,
+  promptSegments,
+  remember,
+  SHELL_TITLES,
+  windowTitle,
+  type ShellFlavor,
+} from "@/lib/shell"
 
 const STORAGE = "iterationscli.alpha.v1"
 const names: Record<View, string> = {
@@ -95,6 +109,8 @@ const stamp = (w: WorkspaceData): WorkspaceData => ({
   ...w,
   updated: new Date().toISOString(),
 })
+const SHELL_STORAGE = "iterations:shell"
+const HISTORY_STORAGE = "iterations:history"
 const labelStyle = (label: Label) =>
   ({ "--label": label.color }) as CSSProperties
 
@@ -135,7 +151,6 @@ export default function Workspace() {
   const terminalDialog = useRef<HTMLDialogElement>(null)
   const mainPrompt = useRef<HTMLInputElement>(null)
   const popupPrompt = useRef<HTMLInputElement>(null)
-  const popupEnd = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState("")
   const [selected, setSelected] = useState<string | null>(null)
   const [canvasFocus, setCanvasFocus] = useState<{
@@ -145,12 +160,14 @@ export default function Workspace() {
   const [confirm, setConfirm] = useState<CommandResult["confirm"]>()
   const reviewedState = useRef<WorkspaceData | null>(null)
   const [command, setCommand] = useState("")
-  const [log, setLog] = useState<string[]>([
-    "SYSTEM / Workspace ready. Type help to explore.",
-  ])
+  const [log, setLog] = useState<LogEntry[]>([])
   const [commands, setCommands] = useState<string[]>([])
-  const historyIndex = useRef(0)
-  const [greeting, setGreeting] = useState("")
+  // The terminal dresses as the shell of the visitor's operating system
+  // unless they picked one with the `shell` command.
+  const [shellChoice, setShellChoice] = useState<ShellFlavor | "auto">("auto")
+  const [deviceShell, setDeviceShell] = useState<ShellFlavor>("bash")
+  const shell = shellChoice === "auto" ? deviceShell : shellChoice
+  const { user } = useAuthenticate() ?? {}
   const [query, setQuery] = useState("")
   const [labelFilter, setLabelFilter] = useState("")
   const [needsSubmission, setNeedsSubmission] = useState(false)
@@ -162,18 +179,55 @@ export default function Workspace() {
   const [fontBusy, setFontBusy] = useState(false)
 
   const dialog = useRef<HTMLDialogElement>(null)
-  const terminalEnd = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setFont(readSavedFont())
+      const device = detectShell(
+        (navigator as { userAgentData?: { platform?: string } }).userAgentData
+          ?.platform ||
+          navigator.platform ||
+          navigator.userAgent
+      )
+      setDeviceShell(device)
+      let flavor = device
+      try {
+        const chosen = localStorage.getItem(SHELL_STORAGE)
+        if (isShell(chosen)) {
+          setShellChoice(chosen)
+          flavor = chosen
+        }
+        const past: unknown = JSON.parse(
+          localStorage.getItem(HISTORY_STORAGE) ?? "[]"
+        )
+        if (Array.isArray(past))
+          setCommands(
+            past.filter((line) => typeof line === "string").slice(-200)
+          )
+      } catch {
+        // No saved shell or history: start fresh.
+      }
       try {
         const raw = localStorage.getItem(STORAGE)
+        let loaded = initialWorkspace()
         if (raw) {
           const saved: unknown = JSON.parse(raw)
           if (!isWorkspace(saved)) throw new Error("Invalid saved workspace")
-          setW(normalizeWorkspace(saved))
+          loaded = normalizeWorkspace(saved)
+          setW(loaded)
         }
+        setLog([
+          {
+            kind: "banner",
+            text: banner(flavor, {
+              version: VERSION,
+              workspace: "personal",
+              tasks: loaded.tasks.length,
+              done: loaded.tasks.filter((t) => t.done).length,
+              incoming: loaded.proposals.length,
+            }),
+          },
+        ])
         setReady(true)
       } catch {
         setStorageError(
@@ -202,30 +256,18 @@ export default function Workspace() {
   // otherwise this stays "local" and browser storage is the only copy.
   const sync = useWorkspaceSync(w, ready, setW)
   useEffect(() => {
-    const text = "Make room for your next idea."
-    let n = 0
-    const reduced = window.matchMedia(
-      "(prefers-reduced-motion: reduce)"
-    ).matches
-    const timer = setInterval(() => {
-      n = reduced ? text.length : n + 1
-      setGreeting(text.slice(0, n))
-      if (n >= text.length) clearInterval(timer)
-    }, 42)
-    return () => clearInterval(timer)
-  }, [])
-  useEffect(() => {
-    terminalEnd.current?.scrollIntoView({ block: "nearest" })
-    popupEnd.current?.scrollIntoView({ block: "nearest" })
-  }, [log])
+    if (!ready) return
+    try {
+      localStorage.setItem(HISTORY_STORAGE, JSON.stringify(commands))
+    } catch {
+      // History is a convenience; losing it is fine.
+    }
+  }, [commands, ready])
   useEffect(() => {
     if (terminalOpen && terminalMode === "modal") {
       terminalDialog.current?.showModal()
     } else terminalDialog.current?.close()
-    if (terminalOpen) {
-      popupPrompt.current?.focus()
-      popupEnd.current?.scrollIntoView({ block: "nearest" })
-    }
+    if (terminalOpen) popupPrompt.current?.focus()
   }, [terminalOpen, terminalMode])
   useEffect(() => {
     const clamp = () => {
@@ -259,6 +301,19 @@ export default function Workspace() {
         setTerminalOpen((open) => !open)
         return
       }
+      // Ctrl+` puts the keyboard back at the prompt from anywhere.
+      if (event.ctrlKey && event.key === "`") {
+        event.preventDefault()
+        if (terminalOpen) popupPrompt.current?.focus()
+        else if (view === "terminal") mainPrompt.current?.focus()
+        else {
+          setView("terminal")
+          setTabs((prev) =>
+            prev.includes("terminal") ? prev : [...prev, "terminal"]
+          )
+        }
+        return
+      }
       const typing =
         event.target instanceof HTMLElement &&
         !!event.target.closest(
@@ -286,7 +341,7 @@ export default function Workspace() {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [ready, terminalOpen, terminalMode])
+  }, [ready, terminalOpen, terminalMode, view])
   useEffect(() => {
     if (selected) dialog.current?.showModal()
     else dialog.current?.close()
@@ -356,13 +411,38 @@ export default function Workspace() {
     !confirm
   )
 
+  const promptContext = {
+    user: user?.username?.trim().toLowerCase().replace(/\s+/g, "-") || "you",
+    workspace: "personal",
+    // Where the prompt says you are: the view beside the terminal, if any.
+    view: view === "terminal" ? (sideView ?? "terminal") : view,
+  }
+  const prompt = promptSegments(shell, promptContext)
+  const print = (...entries: LogEntry[]) =>
+    setLog((prev) => [...prev, ...entries].slice(-400))
+  const chooseShell = (choice: ShellFlavor | "auto") => {
+    setShellChoice(choice)
+    try {
+      if (choice === "auto") localStorage.removeItem(SHELL_STORAGE)
+      else localStorage.setItem(SHELL_STORAGE, choice)
+    } catch {
+      // The choice still holds until the page is closed.
+    }
+  }
+
   const submitCommand = (event?: FormEvent, override?: string) => {
     event?.preventDefault()
     const input = (override ?? command).trim()
-    if (!input) return
-    setCommands((prev) => [...prev, input])
-    historyIndex.current = commands.length + 1
     setCommand("")
+    // The line as it was typed, behind the prompt it was typed at.
+    const echo: LogEntry = {
+      kind: "command",
+      prompt: confirm ? [{ text: confirmPrompt(shell) }] : prompt,
+      text: input,
+      plain: !!confirm,
+    }
+    const say = (text: string) => print(echo, { kind: "output", text })
+    if (!input) return print(echo)
     try {
       if (confirm) {
         if (!/^[yn]$/i.test(input))
@@ -385,35 +465,71 @@ export default function Workspace() {
           )
         }
         setConfirm(undefined)
-        setLog((prev) => [
-          ...prev,
-          `> ${input}`,
-          input.toLowerCase() === "y"
-            ? "Applied. History updated."
-            : "Cancelled.",
-        ])
-        return
+        return say(
+          input.toLowerCase() === "y" ? "Applied. History updated." : "Cancelled."
+        )
       }
+      setCommands((prev) => remember(prev, input))
+      const own = builtin(input, {
+        ...promptContext,
+        flavor: shell,
+        automatic: shellChoice === "auto",
+        history: commands,
+      })
+      if (own?.exit) {
+        if (!terminalOpen)
+          return say(
+            "This is the workspace's own terminal, so there is nothing to exit to. Ctrl+Y opens a terminal window you can close."
+          )
+        setTerminalOpen(false)
+        return print(echo)
+      }
+      if (own?.shell) {
+        chooseShell(own.shell)
+        // A new shell greets you the way that shell does.
+        const next = own.shell === "auto" ? deviceShell : own.shell
+        return say(
+          banner(next, {
+            version: VERSION,
+            workspace: "personal",
+            tasks: w.tasks.length,
+            done: w.tasks.filter((t) => t.done).length,
+            incoming: w.proposals.length,
+          })
+        )
+      }
+      if (own) return say(own.output ?? "")
       const result = execute(w, input, boardCenter())
       if (result.workspace !== w) setW(stamp(result.workspace))
       if (result.view) open(result.view)
+      if (result.go) {
+        // From the workspace's own terminal, `cd` puts the view beside it so
+        // the prompt stays under your hands; a terminal window floats over
+        // the views anyway, so there it simply switches view.
+        if (view === "terminal" && !terminalOpen) {
+          setSplit(result.go === "terminal" ? null : result.go)
+          setSplitTask(null)
+        } else open(result.go)
+      }
       if (result.split !== undefined) {
         setSplit(result.split)
         setSplitTask(null)
+      }
+      if (result.ticket) {
+        setSelected(null)
+        setSplitTask(result.ticket)
       }
       if (result.confirm) {
         setConfirm(result.confirm)
         reviewedState.current = w
       }
-      setLog((prev) =>
-        result.clear ? [] : [...prev, `> ${input}`, result.output].slice(-200)
-      )
+      if (result.clear) setLog([])
+      else say(result.output)
     } catch (error) {
-      setLog((prev) => [
-        ...prev,
-        `> ${input}`,
-        `Error: ${error instanceof Error ? error.message : "Command failed."}`,
-      ])
+      print(echo, {
+        kind: "error",
+        text: error instanceof Error ? error.message : "Command failed.",
+      })
     }
   }
   function formText(event: FormEvent<HTMLFormElement>, key: string) {
@@ -560,180 +676,37 @@ export default function Workspace() {
   }
 
   function terminal(popup = false) {
-    const inputId = popup ? "workspace-popup-command" : "alpha-command"
-    const prompt = popup ? popupPrompt : mainPrompt
     return (
-      <section className={styles.terminal} aria-label="Terminal">
-        <div className={styles.terminalHeading}>
-          <span className={styles.dots} aria-hidden="true">
-            ● ● ●
-          </span>
-          <span>iterations / personal workspace</span>
-          <span>
-            {sync === "synced" || sync === "saving" ? "SYNCED" : "LOCAL"}
-          </span>
-        </div>
-        <div className={styles.terminalBody}>
-          {!popup && (
-            <>
-              <div className={styles.ascii} aria-hidden="true">
-                [ i / cli ]
-              </div>
-              <p className={styles.eyebrow}>YOUR WORK, AT YOUR COMMAND.</p>
-              <h1>
-                {greeting}
-                <span className={styles.cursor}>▍</span>
-              </h1>
-              <p className={styles.muted}>
-                A little structure. A lot of possibility.
-              </p>
-              <div className={styles.quickStats}>
-                <span>
-                  <b>{w.tasks.length}</b> tasks
-                </span>
-                <span>
-                  <b>{completed}</b> completed
-                </span>
-                <span>
-                  <b>{w.proposals.length}</b> incoming
-                </span>
-              </div>
-              <div className={styles.quickCommands}>
-                <button
-                  onClick={() =>
-                    submitCommand(undefined, 'task new "My first task"')
-                  }
-                >
-                  + Create a task
-                </button>
-                <button onClick={() => open("board")}>Open board ↗</button>
-                <button onClick={() => submitCommand(undefined, "help")}>
-                  Explore commands ↗
-                </button>
-              </div>
-            </>
-          )}
-          <div className={styles.log} role="log" aria-label="Command output">
-            {log.map((line, i) => (
-              <pre
-                key={i}
-                className={
-                  line.startsWith(">")
-                    ? styles.commandLine
-                    : line.startsWith("Error:")
-                      ? styles.errorLine
-                      : ""
-                }
-              >
-                {line}
-              </pre>
-            ))}
-            <div ref={popup ? popupEnd : terminalEnd} />
-          </div>
-        </div>
-        {confirm && (
-          <div className={styles.reviewActions}>
-            <span>Apply the change shown above?</span>
-            <button onClick={() => submitCommand(undefined, "Y")}>
-              Y · Confirm
-            </button>
-            <button onClick={() => submitCommand(undefined, "N")}>
-              N · Cancel
-            </button>
-          </div>
-        )}
-        <div className={styles.promptDock}>
-          {completion.candidates.length > 0 && (
-            <div
-              className={styles.suggestions}
-              role="listbox"
-              aria-label="Completions"
-              id={`${inputId}-completions`}
-            >
-              {completion.candidates.slice(0, 8).map((c, i) => (
-                <button
-                  type="button"
-                  role="option"
-                  key={c.value}
-                  aria-selected={i === completion.active}
-                  tabIndex={-1}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    completion.accept(c.value)
-                    prompt.current?.focus()
-                  }}
-                >
-                  <b>{c.value}</b>
-                  {c.description && <span>{c.description}</span>}
-                </button>
-              ))}
-              {completion.candidates.length > 8 && (
-                <span>+{completion.candidates.length - 8} more</span>
-              )}
-              <kbd>Tab</kbd>
-            </div>
-          )}
-          <form onSubmit={submitCommand} className={styles.prompt}>
-            <label htmlFor={inputId}>{confirm ? "Y/N" : "you ~"} ❯</label>
-            <div className={styles.promptField}>
-              <div className={styles.ghost} aria-hidden="true">
-                <span>{command}</span>
-                {completion.suggestion}
-              </div>
-              <input
-                id={inputId}
-                ref={prompt}
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                role="combobox"
-                aria-expanded={completion.candidates.length > 0}
-                aria-controls={`${inputId}-completions`}
-                aria-autocomplete="both"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder={
-                  confirm
-                    ? "Review above, then Y or N"
-                    : 'Try: task new "Build something good"'
-                }
-                onKeyDown={(e) => {
-                  if (completion.onKeyDown(e)) return
-                  if (e.ctrlKey && e.key.toLowerCase() === "l") {
-                    e.preventDefault()
-                    setLog([])
-                  }
-                  if (
-                    e.ctrlKey &&
-                    e.key.toLowerCase() === "c" &&
-                    e.currentTarget.selectionStart ===
-                      e.currentTarget.selectionEnd
-                  ) {
-                    e.preventDefault()
-                    setCommand("")
-                    setConfirm(undefined)
-                    setLog((prev) => [...prev, "^C Cancelled."])
-                  }
-                  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-                    e.preventDefault()
-                    historyIndex.current = Math.max(
-                      0,
-                      Math.min(
-                        commands.length,
-                        historyIndex.current + (e.key === "ArrowUp" ? -1 : 1)
-                      )
-                    )
-                    setCommand(commands[historyIndex.current] ?? "")
-                  }
-                }}
-              />
-            </div>
-            <button type="submit" aria-label="Run command">
-              ↵
-            </button>
-          </form>
-        </div>
-      </section>
+      <ShellTerminal
+        flavor={shell}
+        title={windowTitle(shell, promptContext)}
+        status={sync === "synced" || sync === "saving" ? "SYNCED" : "LOCAL"}
+        prompt={prompt}
+        entries={log}
+        value={command}
+        onChange={setCommand}
+        onSubmit={(line) => submitCommand(undefined, line)}
+        completion={completion}
+        registry={WorkspaceCommands}
+        history={commands}
+        confirming={!!confirm}
+        onClear={() => setLog([])}
+        onCancel={() => {
+          print({
+            kind: "command",
+            prompt: confirm ? [{ text: confirmPrompt(shell) }] : prompt,
+            text: `${command}^C`,
+          })
+          setCommand("")
+          setConfirm(undefined)
+        }}
+        onExit={() => submitCommand(undefined, "exit")}
+        inputRef={popup ? popupPrompt : mainPrompt}
+        inputId={popup ? "workspace-popup-command" : "alpha-command"}
+        // A terminal window already has a title bar of its own.
+        chrome={!popup}
+        autoFocus={!popup}
+      />
     )
   }
 
@@ -1834,7 +1807,9 @@ export default function Workspace() {
             terminalDrag.current = null
           }}
         >
-          <h2 id="workspace-terminal-title">&gt;_ Workspace terminal</h2>
+          <h2 id="workspace-terminal-title">
+            &gt;_ {SHELL_TITLES[shell]} · workspace terminal
+          </h2>
           <div className={styles.terminalWindowControls}>
             <button
               title="Cycle terminal mode (M outside text fields)"
@@ -1873,8 +1848,8 @@ export default function Workspace() {
           {terminal(true)}
         </div>
         <div className={styles.popupHint}>
-          M mode · Tab sidebar (outside inputs) · Tab complete in prompt ·
-          Ctrl+Y close
+          Tab complete · ↑↓ history · Ctrl+R search · Esc or Ctrl+Y close · M
+          mode (outside the prompt)
         </div>
       </>
     )

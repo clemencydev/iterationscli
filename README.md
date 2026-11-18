@@ -62,8 +62,25 @@ The destinations are found, not hand-typed:
 `node scripts/mandelbrot-presets.mjs` rewrites `presets.ts`
 (`--preview <dir>` also writes PNG stills of each zoom).
 
-## Terminal completion
+## Terminal
 
-Both terminals complete commands, subcommands and arguments from the command
-registry in `contexts/TerminalContext/commands.ts` (engine: `lib/completion.ts`).
-Tab completes, Tab again cycles, → accepts the dimmed inline suggestion.
+The workspace terminal (`components/alpha/ShellTerminal.tsx`) is the keyboard
+way into the board, tickets, canvas and history. It dresses as the shell of
+the visitor's operating system: PowerShell on Windows, zsh on macOS, bash
+elsewhere. `shell powershell|bash|zsh|auto` overrides that per device.
+
+- **Commands** act on the workspace, not the machine: `board` (or `ls`),
+  `task new|show|open|move|done|rename|comment`, `find`, `cd <view>`, `stats`,
+  `log`, `revert`, `inbox`, `merge`. `help` lists them all. They live in
+  `execute` in `lib/alpha.ts`; `cd board` keeps the terminal and shows the
+  board beside it.
+- **Keys**: Tab completes commands, subcommands and arguments (again to
+  cycle), → accepts the dimmed suggestion, ↑/↓ recall history (kept across
+  reloads), Ctrl+R searches it, Ctrl+L clears, Ctrl+C cancels, Ctrl+U/K cut
+  the line, Esc empties it. Ctrl+Y opens the terminal as a window over any
+  view and Ctrl+` jumps to the prompt.
+- **Where things are**: prompts, startup text, line editing, history search
+  and syntax colouring are pure functions in `lib/shell.ts`; completion is
+  `lib/completion.ts`, driven by the command registry in
+  `contexts/TerminalContext/commands.ts`. A command added to the registry
+  completes and colours for free.

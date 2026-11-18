@@ -101,6 +101,10 @@ export const WorkspaceCommands: Record<string, Command> = {
   task: group("task", "Create and manage tasks", [
     local("new", "Create a task", [text("title")]),
     local("list", "List every task"),
+    local("show", "Print a ticket", [task]),
+    local("open", "Open a ticket beside this view", [task]),
+    local("rename", "Rename a task", [task, text("new title")]),
+    local("comment", "Add a comment to a task", [task, text("text")]),
     local("done", "Mark a task complete", [task]),
     local("reopen", "Reopen a completed task", [task]),
     local("move", "Move a task to a column", [task, column]),
@@ -108,11 +112,13 @@ export const WorkspaceCommands: Record<string, Command> = {
     local("delete", "Delete a task", [task]),
   ]),
   column: group("column", "Manage board columns", [
+    local("list", "List columns"),
     local("new", "Add a column", [text("name")]),
     local("rename", "Rename a column", [column, text("new name")]),
     local("delete", "Delete a column", [column]),
   ]),
   label: group("label", "Create, color and attach labels", [
+    local("list", "List labels"),
     local("new", "Create a label", [
       text("name"),
       { name: "scope", descriprion: "global|local", values: ["global", "local"] },
@@ -131,6 +137,13 @@ export const WorkspaceCommands: Record<string, Command> = {
       local("link", "Ticket link node", [task]),
     ]),
   ]),
+  board: local("board", "Print the board: columns and their tasks"),
+  ls: local("ls", "Print the board (same as board)"),
+  find: local("find", "Search task titles", [text("text")]),
+  stats: local("stats", "Progress at a glance"),
+  log: local("log", "List restore points"),
+  inbox: local("inbox", "List incoming proposals"),
+  cd: local("cd", "Go to a view", [{ name: "view", descriprion: "<view>", values: VIEW_NAMES }]),
   tab: local("tab", "Open a view", [{ name: "view", descriprion: "<view>", values: VIEW_NAMES }]),
   split: local("split", "Show a second view beside this one", [
     { name: "view", descriprion: "<view>|off", values: [...VIEW_NAMES, "off"] },
@@ -145,6 +158,14 @@ export const WorkspaceCommands: Record<string, Command> = {
   merge: local("merge", "Merge an incoming proposal (asks Y/N)", [
     { name: "proposal-id", descriprion: "<proposal-id>", source: "proposal" },
   ]),
+  shell: local("shell", "Change how this terminal looks", [
+    { name: "shell", descriprion: "auto|powershell|bash|zsh", values: ["auto", "powershell", "bash", "zsh"] },
+  ]),
+  history: local("history", "List the commands you ran"),
+  pwd: local("pwd", "Print where you are"),
+  whoami: local("whoami", "Print who you are"),
   clear: local("clear", "Clear the terminal output"),
+  cls: local("cls", "Clear the terminal output"),
+  exit: local("exit", "Close the terminal window"),
   help: local("help", "List every command"),
 };
