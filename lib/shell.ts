@@ -68,9 +68,50 @@ export const promptText = (flavor: ShellFlavor, context: PromptContext) =>
     .join("")
 
 /** The prompt of the landing-page terminal, which has no workspace open. */
-export function entryPrompt(flavor: ShellFlavor, user: string) {
-  if (flavor === "powershell") return "PS iterations:\\>"
-  return flavor === "zsh" ? `${user}@iterations ~ %` : `${user}@iterations:~$`
+export function entryPrompt(flavor: ShellFlavor, user: string): Segment[] {
+  if (flavor === "powershell")
+    return [
+      { text: "PS ", tone: "symbol" },
+      { text: "iterations:\\", tone: "path" },
+      { text: "> ", tone: "symbol" },
+    ]
+  if (flavor === "zsh")
+    return [
+      { text: `${user}@iterations`, tone: "user" },
+      { text: " ~", tone: "path" },
+      { text: " % ", tone: "symbol" },
+    ]
+  return [
+    { text: `${user}@iterations`, tone: "user" },
+    { text: ":", tone: "symbol" },
+    { text: "~", tone: "path" },
+    { text: "$ ", tone: "symbol" },
+  ]
+}
+
+/** What the landing-page terminal prints when it opens. */
+export function entryBanner(
+  flavor: ShellFlavor,
+  version: string,
+  user: string | null,
+  now = new Date()
+) {
+  const session = user ? `Signed in as ${user}.` : "Not signed in."
+  const hint =
+    "Pick an action with ↑/↓ and Enter, or type a command. 'help' lists them."
+  if (flavor === "powershell")
+    return [`Iterations PowerShell ${version}`, session, "", hint].join("\n")
+  const when = now.toString().slice(0, 24)
+  if (flavor === "zsh")
+    return [`Last login: ${when} on ttys000`, `iterations ${version} · ${session}`, hint].join("\n")
+  return [
+    `Welcome to iterations ${version}`,
+    "",
+    ` * ${session}`,
+    ` * ${hint}`,
+    "",
+    `Last login: ${when} from web`,
+  ].join("\n")
 }
 
 /** The working directory, as `pwd` prints it. */
@@ -291,7 +332,8 @@ export function highlight(
     sub_commands: registry,
   }
   let first = true
-  for (const [text] of input.matchAll(/\s+|"[^"]*"?|'[^']*'?|[^\s]+/g)) {
+  for (const match of input.matchAll(/\s+|"[^"]*"?|'[^']*'?|[^\s]+/g)) {
+    const text = match[0]
     if (/^\s/.test(text)) {
       tokens.push({ text, kind: "space" })
       continue
@@ -301,8 +343,14 @@ export function highlight(
       node?.sub_commands && Object.hasOwn(node.sub_commands, key)
         ? node.sub_commands[key]
         : undefined
+    // A command still being typed is not a mistake yet: only call it unknown
+    // once it can no longer become one.
+    const unfinished =
+      match.index + text.length === input.length &&
+      Object.keys(node?.sub_commands ?? {}).some((name) => name.startsWith(key))
     if (next) tokens.push({ text, kind: first ? "command" : "subcommand" })
-    else if (first) tokens.push({ text, kind: "unknown" })
+    else if (first)
+      tokens.push({ text, kind: unfinished ? "argument" : "unknown" })
     else
       tokens.push({ text, kind: /^["']/.test(text) ? "string" : "argument" })
     // Once a word is an argument, later words are arguments too.

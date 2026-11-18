@@ -5,6 +5,7 @@ import {
   builtin,
   detectShell,
   editLine,
+  entryBanner,
   entryPrompt,
   highlight,
   promptText,
@@ -42,8 +43,14 @@ test("each shell writes its prompt its own way, with the view as the folder", ()
   assert.equal(promptText("bash", board), "ada@iterations:~/personal/board$ ")
   assert.equal(promptText("zsh", here), "ada@iterations ~ % ")
   assert.equal(promptText("zsh", board), "ada@iterations board % ")
-  assert.equal(entryPrompt("powershell", "guest"), "PS iterations:\\>")
-  assert.equal(entryPrompt("bash", "guest"), "guest@iterations:~$")
+  // The landing page has no workspace open, so its prompt sits at the root.
+  const entry = (flavor) =>
+    entryPrompt(flavor, "guest")
+      .map((segment) => segment.text)
+      .join("")
+  assert.equal(entry("powershell"), "PS iterations:\\> ")
+  assert.equal(entry("bash"), "guest@iterations:~$ ")
+  assert.equal(entry("zsh"), "guest@iterations ~ % ")
   assert.equal(workingDirectory("bash", board), "/home/iterations/personal/board")
   assert.equal(workingDirectory("powershell", here), "iterations:\\personal")
   assert.match(windowTitle("powershell", here), /^PowerShell/)
@@ -57,6 +64,10 @@ test("startup text names the shell and counts the work", () => {
   assert.match(banner("zsh", info), /^Last login: /)
   for (const flavor of ["powershell", "bash", "zsh"])
     assert.match(banner(flavor, info), /1 task, 0 done, 2 incoming/)
+  // The landing page greets the same way, and says who is signed in.
+  assert.match(entryBanner("powershell", "1.2.3", null), /^Iterations PowerShell 1\.2\.3\nNot signed in\./)
+  assert.match(entryBanner("bash", "1.2.3", "ada"), /^Welcome to iterations 1\.2\.3[^]*Signed in as ada\./)
+  assert.match(entryBanner("zsh", "1.2.3", null), /^Last login: [^]*Not signed in\./)
 })
 
 test("built-ins answer questions about the terminal itself", () => {
@@ -122,6 +133,10 @@ test("syntax colouring tells commands, subcommands, strings and typos apart", ()
   ])
   assert.deepEqual(kinds("tsak new"), ["unknown:tsak", "argument:new"])
   assert.deepEqual(kinds("LS"), ["command:LS"])
+  // Half a command is not an error until it can no longer become one.
+  assert.deepEqual(kinds("ta"), ["argument:ta"])
+  assert.deepEqual(kinds("ta "), ["unknown:ta"])
+  assert.deepEqual(kinds("tx"), ["unknown:tx"])
   // An unfinished quote is still a string, and nothing is lost.
   const line = 'task  new "half'
   assert.equal(highlight(line, registry).map((token) => token.text).join(""), line)

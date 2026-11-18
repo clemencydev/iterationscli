@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from "react"
 import type { useCompletion } from "@/hooks/use-completion"
@@ -61,6 +62,11 @@ export default function ShellTerminal({
   inputId,
   chrome = true,
   autoFocus = false,
+  onClose,
+  onArrow,
+  disabled = false,
+  promptHidden = false,
+  children,
 }: {
   flavor: ShellFlavor
   /** Shown in the window's title bar. */
@@ -87,6 +93,19 @@ export default function ShellTerminal({
   /** Draw the shell's own title bar. Off when a window already frames it. */
   chrome?: boolean
   autoFocus?: boolean
+  /** Adds a close button to the title bar. */
+  onClose?: () => void
+  /**
+   * Gets ↑ (-1) and ↓ (+1) before history does; return true to keep the key,
+   * e.g. to move through a list shown above the prompt.
+   */
+  onArrow?: (delta: number, event: KeyboardEvent<HTMLInputElement>) => boolean
+  /** The prompt cannot be typed in, e.g. while a request is running. */
+  disabled?: boolean
+  /** Take the prompt away while `children` asks for something else. */
+  promptHidden?: boolean
+  /** Drawn on the screen after the output and before the prompt. */
+  children?: ReactNode
 }) {
   const screen = useRef<HTMLDivElement>(null)
   const paint = useRef<HTMLDivElement>(null)
@@ -116,7 +135,7 @@ export default function ShellTerminal({
   useLayoutEffect(() => {
     const node = screen.current
     if (node) node.scrollTop = node.scrollHeight
-  }, [entries, shown, completion.candidates.length, confirming])
+  }, [entries, shown, completion.candidates.length, confirming, promptHidden])
   // Put the caret where a line edit left it, and keep the coloured copy of
   // the line scrolled with the real input.
   useLayoutEffect(() => {
@@ -231,6 +250,12 @@ export default function ShellTerminal({
       return
     }
     if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      // Alt+↑/↓ always mean history, even when ↑/↓ are steering a list.
+      if (key === "arrowup" || key === "arrowdown") {
+        handled()
+        if (!confirming) recall(key === "arrowup" ? -1 : 1)
+        return
+      }
       const action: Edit | null =
         key === "arrowleft" || key === "b"
           ? "word-back"
@@ -253,8 +278,10 @@ export default function ShellTerminal({
       handled()
       set("")
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      const delta = e.key === "ArrowUp" ? -1 : 1
       handled()
-      if (!confirming) recall(e.key === "ArrowUp" ? -1 : 1)
+      if (onArrow?.(delta, e)) return
+      if (!confirming) recall(delta)
     } else if (e.key === "PageUp" || e.key === "PageDown") {
       handled()
       const node = screen.current
@@ -269,16 +296,21 @@ export default function ShellTerminal({
     : confirming
       ? [{ text: confirmPrompt(flavor) }]
       : prompt
-  const menu = !search && !confirming ? completion.candidates : []
+  const menu =
+    !search && !confirming && !promptHidden ? completion.candidates : []
 
   return (
     <section
       className={styles.terminal}
       data-shell={flavor}
       aria-label={`Terminal (${SHELL_TITLES[flavor]})`}
-      onMouseUp={() => {
-        // A click lands in the prompt, unless it was a drag to select text.
-        if (!window.getSelection()?.toString())
+      onMouseUp={(e) => {
+        // A click lands in the prompt, unless it was a drag to select text or
+        // a click on a control of its own.
+        if (
+          !window.getSelection()?.toString() &&
+          !(e.target as HTMLElement).closest("input,button,select,textarea,a")
+        )
           inputRef.current?.focus({ preventScroll: true })
       }}
     >
@@ -294,6 +326,16 @@ export default function ShellTerminal({
             {title}
           </span>
           <span className={styles.status}>{status}</span>
+          {onClose && (
+            <button
+              type="button"
+              className={styles.close}
+              onClick={onClose}
+              aria-label="Close terminal"
+            >
+              ×
+            </button>
+          )}
         </header>
       )}
       <div className={styles.screen} ref={screen}>
@@ -315,8 +357,10 @@ export default function ShellTerminal({
             )
           )}
         </div>
+        {children}
         <form
           className={styles.line}
+          hidden={promptHidden}
           onSubmit={(e) => {
             e.preventDefault()
             onSubmit()
@@ -344,6 +388,7 @@ export default function ShellTerminal({
               aria-expanded={menu.length > 0}
               aria-controls={`${inputId}-completions`}
               aria-autocomplete="both"
+              readOnly={disabled}
               value={shown}
               onChange={(e) => {
                 // Text that arrives without key presses during a search (a

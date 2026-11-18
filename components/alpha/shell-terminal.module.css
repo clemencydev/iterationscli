@@ -314,3 +314,35 @@
     flex-basis: 12ch;
   }
 }
+
+/* ---- Pieces used when the terminal is a window of its own (the landing
+   page): a close button, and room for a hidden prompt. ---- */
+.line[hidden] {
+  display: none;
+}
+.terminal .close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 24px;
+  margin-right: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: 18px/1 var(--font-sans), system-ui, sans-serif;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.terminal .close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+  opacity: 1;
+}
+.terminal .close:focus-visible {
+  outline: 2px solid var(--t-fg);
+  outline-offset: -2px;
+}
+[data-shell="powershell"] .close {
+  align-self: center;
+}

@@ -1,12 +1,6 @@
 "use client"
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   Dialog,
@@ -19,7 +13,15 @@ import { ENTRY_COMMANDS, parseEntryCommand } from "@/lib/entry-terminal"
 import { Commands } from "@/contexts/TerminalContext/commands"
 import { useCompletion } from "@/hooks/use-completion"
 import type { CompletionCommand } from "@/lib/completion"
-import { detectShell, entryPrompt, isShell } from "@/lib/shell"
+import { VERSION } from "@/lib/alpha"
+import {
+  detectShell,
+  entryBanner,
+  entryPrompt,
+  isShell,
+  type ShellFlavor,
+} from "@/lib/shell"
+import ShellTerminal, { type LogEntry } from "./alpha/ShellTerminal"
 import styles from "./entry-terminal.module.css"
 
 const SHELL_COMMANDS: [string, string][] = [
@@ -28,6 +30,24 @@ const SHELL_COMMANDS: [string, string][] = [
   ["exit", "Close this terminal"],
 ]
 
+const HELP = `login / register   Sign in or create an account here
+workspace          Open the local alpha
+dashboard          Open your account board
+settings / logout  Account actions
+menu               Show selectable actions
+clear (cls)        Clear the output
+exit               Close this terminal
+
+↑ / ↓      choose an action (Alt+↑/↓ recall history) · Enter runs it
+Tab        complete (again to cycle) · → accepts the suggestion
+Ctrl+R     search history · Ctrl+L clear · Ctrl+C cancel · Esc clear the line
+Esc on an empty line, or Ctrl+Y, closes this terminal.`
+
+/**
+ * The terminal on the landing page (Ctrl+Y): the same shell as the workspace
+ * terminal, with a short list of actions to pick from and sign-in asked for
+ * on the screen itself.
+ */
 export default function EntryTerminal({
   close,
   openSettings,
@@ -41,26 +61,25 @@ export default function EntryTerminal({
 }) {
   const { user, checkSession } = useAuthenticate()
   const router = useRouter()
-  // The prompt of the visitor's own shell (or the one they chose in the
-  // workspace). This dialog only opens in the browser, so reading it here is safe.
-  const [promptLabel] = useState(() => {
-    let chosen: string | null = null
+  // The visitor's own shell, or the one they chose in the workspace. This
+  // dialog only ever opens in the browser, so reading it here is safe.
+  const [flavor] = useState<ShellFlavor>(() => {
     try {
-      chosen = window.localStorage.getItem("iterations:shell")
+      const chosen = window.localStorage.getItem("iterations:shell")
+      if (isShell(chosen)) return chosen
     } catch {
       // Fall back to the device's shell.
     }
-    return entryPrompt(
-      isShell(chosen)
-        ? chosen
-        : detectShell(navigator.platform || navigator.userAgent),
-      "guest"
-    )
+    return detectShell(navigator.platform || navigator.userAgent)
   })
+  const name = user?.username?.trim().toLowerCase().replace(/\s+/g, "-") || "guest"
+  const prompt = entryPrompt(flavor, name)
   const [input, setInput] = useState("")
-  const [output, setOutput] = useState<string[]>([
-    "IterationsCLI [alpha 0.1.0]",
-    "Choose an option below, or type a command. Type help to explore.",
+  const [output, setOutput] = useState<LogEntry[]>(() => [
+    {
+      kind: "banner",
+      text: entryBanner(flavor, VERSION, user?.username ?? null),
+    },
   ])
   const [selected, setSelected] = useState(0)
   const [menu, setMenu] = useState(true)
@@ -70,10 +89,8 @@ export default function EntryTerminal({
   const [confirmation, setConfirmation] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
-  const prompt = useRef<HTMLInputElement>(null)
+  const promptField = useRef<HTMLInputElement>(null)
   const usernameField = useRef<HTMLInputElement>(null)
-  const end = useRef<HTMLDivElement>(null)
-  const position = useRef(history.length)
   const request = useRef<AbortController | null>(null)
   const options = ENTRY_COMMANDS.filter(
     (c) =>
@@ -81,6 +98,8 @@ export default function EntryTerminal({
       (!user || !["login", "register"].includes(c.command))
   )
   const active = Math.min(selected, options.length - 1)
+  // The list is for an empty prompt; once you type, completion takes over.
+  const choosing = menu && !mode && !input
   // What Tab can complete: the command registry (including "auth" and its
   // subcommands) plus the actions available to this session.
   const signedIn = !!user
@@ -95,20 +114,19 @@ export default function EntryTerminal({
           name: option.command,
           usage: option.title,
         }
-    for (const [name, usage] of SHELL_COMMANDS) commands[name] ??= { name, usage }
+    for (const [command, usage] of SHELL_COMMANDS)
+      commands[command] ??= { name: command, usage }
     return commands
   }, [signedIn])
   const completion = useCompletion(input, setInput, registry, undefined, !busy)
-  const write = (text: string) =>
-    setOutput((prev) => [...prev, text].slice(-80))
+  const print = (...entries: LogEntry[]) =>
+    setOutput((prev) => [...prev, ...entries].slice(-120))
+  const write = (text: string) => print({ kind: "output", text })
 
   useEffect(() => () => request.current?.abort(), [])
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "nearest" })
-  }, [output])
-  useEffect(() => {
     if (mode) usernameField.current?.focus()
-    else prompt.current?.focus()
+    else promptField.current?.focus()
   }, [mode])
 
   async function run(raw: string) {
@@ -116,20 +134,26 @@ export default function EntryTerminal({
     const command = parseEntryCommand(raw)
     setInput("")
     if (!command) {
-      write(
-        "Command not recognized. Type help. Enter credentials only in the sign-in prompts."
+      // Whatever followed the first word may be a password typed in the wrong
+      // place, so it is not repeated on screen and never enters history.
+      const [word = "", ...rest] = raw.trim().split(/\s+/)
+      print(
+        { kind: "command", prompt, text: rest.length ? `${word} …` : word },
+        {
+          kind: "error",
+          text: "Command not recognized. Type help. Enter credentials only in the sign-in prompts.",
+        }
       )
       return
     }
     // Only canonical commands enter history. Credentials and arbitrary arguments never do.
     remember(command)
-    position.current = Math.min(history.length + 1, 100)
     if (command === "clear") {
       setOutput([])
       setMenu(false)
       return
     }
-    write(`${promptLabel} ${command}`)
+    print({ kind: "command", prompt, text: command })
     if (command === "exit") {
       close()
       return
@@ -140,9 +164,7 @@ export default function EntryTerminal({
       return
     }
     if (command === "help") {
-      write(
-        "login / register   Sign in or create an account here\nworkspace          Open the local alpha\ndashboard          Open your account board\nsettings / logout  Account actions\nmenu               Show selectable actions\nclear (cls)        Clear the output\nexit               Close this terminal\n\n↑/↓ select actions · Enter runs · Tab completes (again to cycle) · → accepts the suggestion\nAlt+↑/↓ recall history · Ctrl+L clears · Ctrl+C cancels\nEsc or Ctrl+Y closes. This prompt runs Iterations commands."
-      )
+      write(HELP)
       return
     }
     if (command === "login" || command === "register") {
@@ -189,7 +211,10 @@ export default function EntryTerminal({
         setSelected(0)
       } catch (err) {
         if (!controller.signal.aborted)
-          write(err instanceof Error ? err.message : "Sign-out failed.")
+          print({
+            kind: "error",
+            text: err instanceof Error ? err.message : "Sign-out failed.",
+          })
       } finally {
         if (!controller.signal.aborted) setBusy(false)
       }
@@ -250,6 +275,7 @@ export default function EntryTerminal({
 
   function cancel() {
     if (busy) return
+    print({ kind: "command", prompt, text: `${mode ? "" : input}^C`, plain: true })
     setMode(null)
     setPassword("")
     setConfirmation("")
@@ -257,21 +283,6 @@ export default function EntryTerminal({
     setError("")
     setInput("")
     setMenu(true)
-    write("^C  Cancelled.")
-  }
-  function keys(e: KeyboardEvent<HTMLInputElement>) {
-    if (completion.onKeyDown(e)) return
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      e.preventDefault()
-      const delta = e.key === "ArrowUp" ? -1 : 1
-      if (e.altKey || input || !menu) {
-        position.current = Math.max(
-          0,
-          Math.min(history.length, position.current + delta)
-        )
-        setInput(history[position.current] ?? "")
-      } else setSelected((active + delta + options.length) % options.length)
-    }
   }
 
   return (
@@ -286,14 +297,23 @@ export default function EntryTerminal({
         showCloseButton={false}
         onOpenAutoFocus={(e) => {
           e.preventDefault()
-          prompt.current?.focus()
+          promptField.current?.focus()
+        }}
+        onEscapeKeyDown={(e) => {
+          // Esc backs out one step at a time: the sign-in prompts, then the
+          // typed line, and only then the terminal itself.
+          if (mode) {
+            e.preventDefault()
+            cancel()
+          } else if (input) {
+            e.preventDefault()
+            setInput("")
+          }
         }}
         onKeyDown={(e) => {
-          if (e.ctrlKey && e.key.toLowerCase() === "l") {
-            e.preventDefault()
-            setOutput([])
-          }
+          // Ctrl+C from the sign-in fields; the prompt handles its own.
           if (
+            mode &&
             e.ctrlKey &&
             e.key.toLowerCase() === "c" &&
             !window.getSelection()?.toString()
@@ -303,50 +323,74 @@ export default function EntryTerminal({
           }
         }}
       >
-        <header className={styles.titlebar}>
-          <DialogTitle className={styles.title}>
-            <span aria-hidden="true">&gt;_</span> Iterations terminal
-          </DialogTitle>
-          <button onClick={close} aria-label="Close terminal">
-            ×
-          </button>
-        </header>
+        <DialogTitle className="sr-only">Iterations terminal</DialogTitle>
         <DialogDescription className="sr-only">
           Select an action with arrow keys and Enter, or type a command. Sign in
           and create accounts inside the terminal.
         </DialogDescription>
-        <div className={styles.screen}>
-          <div
-            role="log"
-            aria-label="Terminal output"
-            className={styles.output}
-          >
-            {output.map((line, i) => (
-              <pre key={i}>{line}</pre>
-            ))}
-            <div ref={end} />
-          </div>
-          {!mode && menu && (
+        <ShellTerminal
+          flavor={flavor}
+          title={
+            flavor === "powershell"
+              ? "PowerShell — iterations:\\"
+              : flavor === "zsh"
+                ? "iterations — -zsh"
+                : `${name}@iterations: ~`
+          }
+          status={user ? user.username : "GUEST"}
+          prompt={prompt}
+          entries={output}
+          value={input}
+          onChange={setInput}
+          onSubmit={(line) => {
+            const typed = line ?? input
+            if (typed.trim()) void run(typed)
+            else if (choosing) void run(options[active].command)
+            else print({ kind: "command", prompt, text: "" })
+          }}
+          completion={completion}
+          registry={registry}
+          history={history}
+          confirming={false}
+          onClear={() => setOutput([])}
+          onCancel={cancel}
+          onExit={close}
+          onClose={close}
+          onArrow={(delta) => {
+            if (!choosing) return false
+            setSelected((active + delta + options.length) % options.length)
+            return true
+          }}
+          inputRef={promptField}
+          inputId="entry-command"
+          disabled={busy}
+          promptHidden={!!mode}
+        >
+          {choosing && (
             <div
-              className={styles.menu}
+              className={styles.choices}
               role="group"
               aria-label="Terminal actions"
             >
+              <p>? What would you like to do?</p>
               {options.map((option, i) => (
                 <button
                   key={option.command}
-                  className={i === active ? styles.selected : ""}
+                  type="button"
+                  className={i === active ? styles.chosen : ""}
                   disabled={busy}
-                  onFocus={() => setSelected(i)}
+                  tabIndex={-1}
                   onMouseEnter={() => setSelected(i)}
-                  onClick={() => void run(option.command)}
+                  onClick={() => {
+                    promptField.current?.focus()
+                    void run(option.command)
+                  }}
                 >
-                  <span aria-hidden="true">{i === active ? ">" : " "}</span>
+                  <span aria-hidden="true">{i === active ? "❯" : " "}</span>
+                  <b>{option.command}</b>
                   <span>
-                    {option.title}
-                    <small>{option.description}</small>
+                    {option.title} · {option.description}
                   </span>
-                  <code>{option.command}</code>
                 </button>
               ))}
             </div>
@@ -359,21 +403,20 @@ export default function EntryTerminal({
                 void authenticate()
               }}
             >
-              <h2>
-                {mode === "login"
-                  ? "Sign in to Iterations"
-                  : "Create your account"}
-              </h2>
               <p>
-                Enter your credentials below. Passwords stay out of terminal
-                history.
+                {mode === "login"
+                  ? "Sign in to Iterations."
+                  : "Create your Iterations account."}{" "}
+                Passwords stay out of terminal history.
               </p>
               <label>
-                Username
+                <span>Username: </span>
                 <input
                   ref={usernameField}
                   name="username"
                   autoComplete="username"
+                  autoCapitalize="off"
+                  spellCheck={false}
                   required
                   value={username}
                   disabled={busy}
@@ -381,7 +424,7 @@ export default function EntryTerminal({
                 />
               </label>
               <label>
-                Password
+                <span>Password: </span>
                 <input
                   name="password"
                   type="password"
@@ -396,7 +439,7 @@ export default function EntryTerminal({
               </label>
               {mode === "register" && (
                 <label>
-                  Confirm password
+                  <span>Confirm password: </span>
                   <input
                     name="confirm-password"
                     type="password"
@@ -418,86 +461,16 @@ export default function EntryTerminal({
                   {busy
                     ? "Connecting…"
                     : mode === "login"
-                      ? "Sign in ↵"
-                      : "Create account ↵"}
+                      ? "[Enter] Sign in"
+                      : "[Enter] Create account"}
                 </button>
                 <button type="button" onClick={cancel} disabled={busy}>
-                  Cancel
+                  [Esc] Cancel
                 </button>
               </div>
             </form>
           )}
-        </div>
-        {!mode && completion.candidates.length > 0 && (
-          <div
-            className={styles.suggestions}
-            role="listbox"
-            aria-label="Completions"
-          >
-            {completion.candidates.slice(0, 6).map((c, i) => (
-              <button
-                type="button"
-                role="option"
-                key={c.value}
-                aria-selected={i === completion.active}
-                tabIndex={-1}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  completion.accept(c.value)
-                  prompt.current?.focus()
-                }}
-              >
-                <b>{c.value}</b>
-                {c.description && <span>{c.description}</span>}
-              </button>
-            ))}
-          </div>
-        )}
-        {!mode && (
-          <form
-            className={styles.prompt}
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (input.trim()) void run(input)
-              else if (menu) void run(options[active].command)
-            }}
-          >
-            <label htmlFor="entry-command">{promptLabel}</label>
-            <div className={styles.field}>
-              <div className={styles.ghost} aria-hidden="true">
-                <span>{input}</span>
-                {completion.suggestion}
-              </div>
-              <input
-              ref={prompt}
-              id="entry-command"
-              aria-label="Terminal command"
-              autoComplete="off"
-              spellCheck={false}
-              disabled={busy}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={keys}
-              placeholder={
-                busy
-                  ? "Connecting…"
-                  : menu
-                    ? `${options[active].command} · Enter to select`
-                    : "Type a command…"
-              }
-            />
-            </div>
-            <button disabled={busy} aria-label="Run command">
-              ↵
-            </button>
-          </form>
-        )}
-        <footer className={styles.footer}>
-          <span>
-            {user ? `Signed in as ${user.username}` : "Guest session"}
-          </span>
-          <span>↑↓ select · Tab complete · → accept · Ctrl+Y close</span>
-        </footer>
+        </ShellTerminal>
       </DialogContent>
     </Dialog>
   )

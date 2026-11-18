@@ -1,243 +1,132 @@
+/* The landing-page terminal. The shell itself is alpha/ShellTerminal.tsx; this
+   sheet sizes its dialog and styles the two things only this terminal has:
+   the list of actions and the sign-in prompts. Both sit on the shell's screen
+   and take their colours from its --t-* variables. */
 .window {
-  width: min(780px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  width: min(820px, calc(100vw - 24px));
   max-width: none;
+  height: min(540px, calc(100dvh - 48px));
   padding: 0;
   gap: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--background);
-  color: var(--foreground);
+  border: 1px solid #ffffff26;
+  border-radius: 8px;
+  background: #0c0c0c;
   overflow: hidden;
-  font-family: var(--font-mono), monospace;
+  box-shadow: 0 24px 80px #000000aa;
 }
-.titlebar {
+
+/* ---- Actions: an arrow-key list, like a CLI's interactive prompt ---- */
+.choices {
+  display: grid;
+  margin: 0.4em 0 1em;
+}
+.choices p {
+  margin: 0;
+  color: var(--t-command);
+}
+.choices button {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 18px;
-  background: color-mix(in srgb, var(--muted) 40%, var(--background));
-  border-bottom: 1px solid var(--border);
-}
-.title {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  font-size: 12px;
-  font-weight: 400;
-}
-.window button {
+  gap: 1ch;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.titlebar button {
-  width: 28px;
-  height: 28px;
-  font-size: 20px;
+.choices button span:first-child {
+  flex: 0 0 1ch;
 }
-.screen {
-  padding: 22px 24px;
-  max-height: min(65dvh, 570px);
-  overflow-y: auto;
-  min-height: 220px;
+.choices button b {
+  flex: 0 0 11ch;
+  font-weight: 400;
 }
-.output pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.8;
-  margin-bottom: 10px;
-}
-.menu {
-  display: grid;
-  gap: 4px;
-  margin-top: 24px;
-}
-.menu button {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  text-align: left;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  font-size: 12px;
-}
-.menu .selected {
-  background: var(--accent);
-  border-color: var(--border);
-}
-.menu button > span:first-child {
-  width: 10px;
-}
-.menu small {
-  display: block;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  margin-top: 4px;
-}
-.menu code {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--muted-foreground);
-}
-.prompt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 16px 24px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-}
-.prompt label {
+.choices button span:last-child {
+  color: var(--t-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.field {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  display: flex;
+.choices .chosen,
+.choices .chosen span:last-child {
+  color: var(--t-string);
 }
-.prompt input {
-  flex: 1;
-  width: 100%;
-  min-width: 0;
-  background: transparent;
-  padding: 4px;
-  outline: none;
+.choices button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
-/* Inline suggestion: an invisible copy of the input pushes the dimmed
-   remainder to the caret. */
-.ghost {
-  position: absolute;
-  inset: 0;
-  padding: 4px;
-  white-space: pre;
-  overflow: hidden;
-  pointer-events: none;
-  color: var(--muted-foreground);
-  opacity: 0.6;
-}
-.ghost span {
-  visibility: hidden;
-}
-.suggestions {
-  display: flex;
-  gap: 4px;
-  padding: 6px 24px;
-  border-top: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.suggestions button {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-shrink: 0;
-  padding: 3px 8px;
-  border: 1px solid transparent;
-  font-size: 11px;
-}
-.suggestions button:first-child {
-  border-color: var(--border);
-}
-.suggestions button:hover,
-.suggestions button[aria-selected="true"] {
-  background: var(--accent);
-  border-color: var(--ring);
-}
-.suggestions b {
-  font-weight: 500;
-}
-.suggestions span {
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
-.prompt input::placeholder {
-  color: var(--muted-foreground);
-}
-.prompt button {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-}
-.footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px 24px;
-  background: color-mix(in srgb, var(--muted) 40%, var(--background));
-  color: var(--muted-foreground);
-  font-size: 9px;
-  border-top: 1px solid var(--border);
-}
+
+/* ---- Sign-in: questions asked on the screen, one per line ---- */
 .auth {
-  margin-top: 24px;
-  border-top: 1px dashed var(--border);
-  padding-top: 18px;
-}
-.auth h2 {
-  font-size: 14px;
+  display: grid;
+  margin-top: 0.4em;
 }
 .auth p {
-  font-size: 11px;
-  margin: 10px 0 20px;
-  color: var(--muted-foreground);
+  margin: 0 0 0.6em;
+  color: var(--t-dim);
 }
 .auth label {
-  display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 12px;
-  align-items: center;
-  font-size: 12px;
-  margin: 12px 0;
+  display: flex;
+  align-items: baseline;
+  white-space: pre;
+  color: var(--t-dim);
+}
+/* The question being answered is the bright one. */
+.auth label:focus-within {
+  color: var(--t-fg);
 }
 .auth input {
+  flex: 1;
   min-width: 0;
-  background: var(--muted);
-  border: 1px solid var(--border);
-  padding: 9px 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--t-fg);
+  caret-color: var(--t-fg);
+  caret-shape: block;
+  font: inherit;
+}
+.auth input:disabled {
+  opacity: 0.6;
+}
+.auth .error {
+  margin: 0.6em 0 0;
+  color: var(--t-error);
 }
 .actions {
   display: flex;
-  gap: 10px;
-  margin-top: 20px;
+  gap: 3ch;
+  margin-top: 0.8em;
 }
 .actions button {
-  border: 1px solid var(--border);
-  padding: 9px 16px;
-  font-size: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--t-dim);
+  font: inherit;
+  cursor: pointer;
 }
 .actions button:first-child {
-  background: var(--primary);
-  color: var(--primary-foreground);
+  color: var(--t-string);
 }
-.auth .error {
-  color: var(--destructive);
+.actions button:hover:not(:disabled),
+.actions button:focus-visible {
+  color: var(--t-fg);
+  text-decoration: underline;
+  outline: none;
 }
-.window :is(button, input):focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+.actions button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
-.window button:disabled {
-  opacity: 0.5;
-  cursor: wait;
-}
-@media (max-width: 540px) {
-  .screen {
-    padding: 16px;
-  }
-  .menu code {
-    display: none;
-  }
-  .prompt {
-    padding: 14px;
-    gap: 6px;
-    font-size: 11px;
-  }
-  .auth label {
-    grid-template-columns: 1fr;
-    gap: 5px;
-  }
-  .footer {
-    padding: 10px 14px;
+
+@media (max-width: 640px) {
+  .choices button b {
+    flex-basis: 10ch;
   }
 }
