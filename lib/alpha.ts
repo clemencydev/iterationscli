@@ -17,6 +17,9 @@ export type Label = {
   scope: "global" | "local"
 }
 export type Stroke = {
+  taskId?: string
+  column?: string
+  comments?: string[]
   id: string
   points: [number, number][]
   color: string
@@ -24,12 +27,30 @@ export type Stroke = {
   width?: number
 }
 export const PEN_WIDTHS = [2, 3, 5, 8, 14]
-export const DEFAULT_PALETTE = ["#e5e5e5", "#f87171", "#fbbf24", "#4ade80", "#60a5fa", "#c084fc"]
-export const STICKY_COLORS = ["#e4b93d", "#f08a7b", "#7fc98b", "#6fb1e8", "#b99cf0", "#9aa0a6"]
+export const DEFAULT_PALETTE = [
+  "#e5e5e5",
+  "#f87171",
+  "#fbbf24",
+  "#4ade80",
+  "#60a5fa",
+  "#c084fc",
+]
+export const STICKY_COLORS = [
+  "#e4b93d",
+  "#f08a7b",
+  "#7fc98b",
+  "#6fb1e8",
+  "#b99cf0",
+  "#9aa0a6",
+]
 export const TEXT_SIZES = [14, 18, 24, 36, 56]
 export const isHexColor = (value: unknown): value is string =>
   typeof value === "string" && /^#[\da-f]{6}$/i.test(value)
 export type WhiteboardObject = {
+  /** Source item for a shortcut created by selection assignment. */
+  generatedFor?: string
+  column?: string
+  comments?: string[]
   html?: string
   from?: Connection
   to?: Connection
@@ -48,6 +69,32 @@ export type WhiteboardObject = {
   height: number
   text: string
 }
+/** Derive reciprocal links from current objects, so relinking/deleting never leaves stale ticket references. */
+export function ticketCanvasItems(w: Workspace, taskId: string) {
+  const ids = new Set(
+    w.objects.filter((o) => o.taskId === taskId).map((o) => o.id)
+  )
+  for (const arrow of w.objects.filter((o) => o.kind === "arrow")) {
+    const from = w.objects.find((o) => o.id === arrow.from?.objectId)
+    const to = w.objects.find((o) => o.id === arrow.to?.objectId)
+    if (from?.kind === "link" && from.taskId === taskId && to) ids.add(to.id)
+    if (to?.kind === "link" && to.taskId === taskId && from) ids.add(from.id)
+  }
+  return [
+    ...w.objects
+      .filter((o) => ids.has(o.id))
+      .map((o) => ({
+        id: o.id,
+        kind: o.kind as string,
+        title:
+          o.text.trim().slice(0, 80) ||
+          (o.kind === "link" ? "Ticket shortcut" : o.kind),
+      })),
+    ...w.strokes
+      .filter((s) => s.taskId === taskId)
+      .map((s) => ({ id: s.id, kind: "drawing", title: "Linked drawing" })),
+  ]
+}
 export type WhiteboardKind =
   | "sticky"
   | "kanban"
@@ -63,87 +110,209 @@ export const WHITEBOARD_KINDS: WhiteboardKind[] = [
   "text",
   "link",
 ]
-export type Connection = { objectId: string; side: "top" | "right" | "bottom" | "left" }
-export function connectionPoint(object: WhiteboardObject, side: Connection["side"]) {
-  return { x: object.x + (side === "left" ? 0 : side === "right" ? object.width : object.width / 2), y: object.y + (side === "top" ? 0 : side === "bottom" ? object.height : object.height / 2) }
+export type Connection = {
+  objectId: string
+  side: "top" | "right" | "bottom" | "left"
 }
-export function resolveArrow(item: WhiteboardObject, objects: WhiteboardObject[]): WhiteboardObject {
+export function connectionPoint(
+  object: WhiteboardObject,
+  side: Connection["side"]
+) {
+  return {
+    x:
+      object.x +
+      (side === "left"
+        ? 0
+        : side === "right"
+          ? object.width
+          : object.width / 2),
+    y:
+      object.y +
+      (side === "top"
+        ? 0
+        : side === "bottom"
+          ? object.height
+          : object.height / 2),
+  }
+}
+export function resolveArrow(
+  item: WhiteboardObject,
+  objects: WhiteboardObject[]
+): WhiteboardObject {
   if (item.kind !== "arrow") return item
-  const source = objects.find(o => o.id === item.from?.objectId)
-  const target = objects.find(o => o.id === item.to?.objectId)
-  const start = source && item.from ? connectionPoint(source, item.from.side) : { x: item.x, y: item.y }
-  const end = target && item.to ? connectionPoint(target, item.to.side) : { x: item.x + item.width, y: item.y + item.height }
-  return { ...item, x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y }
+  const source = objects.find((o) => o.id === item.from?.objectId)
+  const target = objects.find((o) => o.id === item.to?.objectId)
+  const start =
+    source && item.from
+      ? connectionPoint(source, item.from.side)
+      : { x: item.x, y: item.y }
+  const end =
+    target && item.to
+      ? connectionPoint(target, item.to.side)
+      : { x: item.x + item.width, y: item.y + item.height }
+  return {
+    ...item,
+    x: start.x,
+    y: start.y,
+    width: end.x - start.x,
+    height: end.y - start.y,
+  }
 }
-export function connectObjects(w: Workspace, from: Connection, to: Connection): Workspace {
-  const source = w.objects.find(o => o.id === from.objectId && o.kind !== "arrow")
-  const target = w.objects.find(o => o.id === to.objectId && o.kind !== "arrow")
-  if (!source || !target || source.id === target.id) throw new Error("Connect two different items.")
-  const start = connectionPoint(source, from.side), end = connectionPoint(target, to.side)
-  return { ...w, objects: [...w.objects, { id: uid(), kind: "arrow", text: "", x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y, from, to }] }
+export function connectObjects(
+  w: Workspace,
+  from: Connection,
+  to: Connection
+): Workspace {
+  const source = w.objects.find(
+    (o) => o.id === from.objectId && o.kind !== "arrow"
+  )
+  const target = w.objects.find(
+    (o) => o.id === to.objectId && o.kind !== "arrow"
+  )
+  if (!source || !target || source.id === target.id)
+    throw new Error("Connect two different items.")
+  const start = connectionPoint(source, from.side),
+    end = connectionPoint(target, to.side)
+  return {
+    ...w,
+    objects: [
+      ...w.objects,
+      {
+        id: uid(),
+        kind: "arrow",
+        text: "",
+        x: start.x,
+        y: start.y,
+        width: end.x - start.x,
+        height: end.y - start.y,
+        from,
+        to,
+      },
+    ],
+  }
 }
 /** Side of `object` closest to a point; used when an arrow end is dropped on an item. */
-export function nearestSide(object: WhiteboardObject, point: { x: number; y: number }): Connection["side"] {
+export function nearestSide(
+  object: WhiteboardObject,
+  point: { x: number; y: number }
+): Connection["side"] {
   const sides = ["top", "right", "bottom", "left"] as const
-  let best: Connection["side"] = "top", distance = Infinity
+  let best: Connection["side"] = "top",
+    distance = Infinity
   for (const side of sides) {
     const p = connectionPoint(object, side)
     const d = (p.x - point.x) ** 2 + (p.y - point.y) ** 2
-    if (d < distance) { distance = d; best = side }
+    if (d < distance) {
+      distance = d
+      best = side
+    }
   }
   return best
 }
 /** Topmost connectable item under a point (arrows never accept connections). */
-export function objectAt(objects: WhiteboardObject[], point: { x: number; y: number }, exclude?: string, margin = 12): WhiteboardObject | undefined {
+export function objectAt(
+  objects: WhiteboardObject[],
+  point: { x: number; y: number },
+  exclude?: string,
+  margin = 12
+): WhiteboardObject | undefined {
   for (let i = objects.length - 1; i >= 0; i--) {
     const o = objects[i]
     if (o.kind === "arrow" || o.id === exclude) continue
-    if (point.x >= o.x - margin && point.x <= o.x + o.width + margin && point.y >= o.y - margin && point.y <= o.y + o.height + margin) return o
+    if (
+      point.x >= o.x - margin &&
+      point.x <= o.x + o.width + margin &&
+      point.y >= o.y - margin &&
+      point.y <= o.y + o.height + margin
+    )
+      return o
   }
 }
 /** Sides that face each other, so a new arrow takes the short way between two items. */
-export function facingSides(a: WhiteboardObject, b: WhiteboardObject): [Connection["side"], Connection["side"]] {
-  const dx = b.x + b.width / 2 - (a.x + a.width / 2), dy = b.y + b.height / 2 - (a.y + a.height / 2)
-  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? ["right", "left"] : ["left", "right"]
+export function facingSides(
+  a: WhiteboardObject,
+  b: WhiteboardObject
+): [Connection["side"], Connection["side"]] {
+  const dx = b.x + b.width / 2 - (a.x + a.width / 2),
+    dy = b.y + b.height / 2 - (a.y + a.height / 2)
+  if (Math.abs(dx) >= Math.abs(dy))
+    return dx >= 0 ? ["right", "left"] : ["left", "right"]
   return dy >= 0 ? ["bottom", "top"] : ["top", "bottom"]
 }
 /** Adds a ticket link node beside an item and connects the two with an arrow. */
-export function linkObjectToTask(w: Workspace, objectId: string, taskId?: string): Workspace {
-  const source = w.objects.find(o => o.id === objectId && o.kind !== "arrow")
+export function linkObjectToTask(
+  w: Workspace,
+  objectId: string,
+  taskId?: string
+): Workspace {
+  const source = w.objects.find((o) => o.id === objectId && o.kind !== "arrow")
   if (!source) throw new Error("Whiteboard item not found.")
-  if (taskId !== undefined && !w.tasks.some(t => t.id === taskId)) throw new Error("Task not found.")
-  const node: WhiteboardObject = { id: uid(), kind: "link", text: "", taskId, x: source.x + source.width + 90, y: source.y + source.height / 2 - 48, width: 240, height: 96 }
+  if (taskId !== undefined && !w.tasks.some((t) => t.id === taskId))
+    throw new Error("Task not found.")
+  const node: WhiteboardObject = {
+    id: uid(),
+    kind: "link",
+    text: "",
+    taskId,
+    x: source.x + source.width + 90,
+    y: source.y + source.height / 2 - 48,
+    width: 240,
+    height: 96,
+  }
   const next = { ...w, objects: [...w.objects, node] }
-  return connectObjects(next, { objectId: source.id, side: "right" }, { objectId: node.id, side: "left" })
+  return connectObjects(
+    next,
+    { objectId: source.id, side: "right" },
+    { objectId: node.id, side: "left" }
+  )
 }
-export function renameColumn(w: Workspace, from: string, to: string): Workspace {
+export function renameColumn(
+  w: Workspace,
+  from: string,
+  to: string
+): Workspace {
   const name = to.trim()
   if (!w.columns.includes(from)) throw new Error("Column not found.")
   if (!name) throw new Error("A column needs a name.")
   if (name === from) return w
-  if (w.columns.includes(name)) throw new Error("A column with that name already exists.")
+  if (w.columns.includes(name))
+    throw new Error("A column with that name already exists.")
   return {
     ...w,
-    columns: w.columns.map(c => (c === from ? name : c)),
-    tasks: w.tasks.map(t => (t.column === from ? { ...t, column: name } : t)),
+    columns: w.columns.map((c) => (c === from ? name : c)),
+    tasks: w.tasks.map((t) => (t.column === from ? { ...t, column: name } : t)),
   }
 }
 export function addColumn(w: Workspace, raw: string): Workspace {
   const name = raw.trim()
-  if (!name || w.columns.includes(name)) throw new Error("Choose a new, nonempty column name.")
+  if (!name || w.columns.includes(name))
+    throw new Error("Choose a new, nonempty column name.")
   return { ...w, columns: [...w.columns, name] }
 }
-export function setLabelColor(w: Workspace, id: string, color: string): Workspace {
+export function setLabelColor(
+  w: Workspace,
+  id: string,
+  color: string
+): Workspace {
   if (!isHexColor(color)) throw new Error("Use a hex color such as #ff8800.")
-  if (!w.labels.some(l => l.id === id)) throw new Error("Label not found.")
-  return { ...w, labels: w.labels.map(l => (l.id === id ? { ...l, color: color.toLowerCase() } : l)) }
-}
-export function deleteLabel(w: Workspace, id: string): Workspace {
-  if (!w.labels.some(l => l.id === id)) throw new Error("Label not found.")
+  if (!w.labels.some((l) => l.id === id)) throw new Error("Label not found.")
   return {
     ...w,
-    labels: w.labels.filter(l => l.id !== id),
-    tasks: w.tasks.map(t => (t.labels.includes(id) ? { ...t, labels: t.labels.filter(l => l !== id) } : t)),
+    labels: w.labels.map((l) =>
+      l.id === id ? { ...l, color: color.toLowerCase() } : l
+    ),
+  }
+}
+export function deleteLabel(w: Workspace, id: string): Workspace {
+  if (!w.labels.some((l) => l.id === id)) throw new Error("Label not found.")
+  return {
+    ...w,
+    labels: w.labels.filter((l) => l.id !== id),
+    tasks: w.tasks.map((t) =>
+      t.labels.includes(id)
+        ? { ...t, labels: t.labels.filter((l) => l !== id) }
+        : t
+    ),
   }
 }
 /** Saved pen colors: unique, lower-case hex, most recent last, capped. */
@@ -155,7 +324,12 @@ export function addPaletteColor(w: Workspace, color: string): Workspace {
   return { ...w, palette: [...palette, value].slice(-24) }
 }
 export function removePaletteColor(w: Workspace, color: string): Workspace {
-  return { ...w, palette: (w.palette ?? DEFAULT_PALETTE).filter(c => c !== color.toLowerCase()) }
+  return {
+    ...w,
+    palette: (w.palette ?? DEFAULT_PALETTE).filter(
+      (c) => c !== color.toLowerCase()
+    ),
+  }
 }
 export type FontChoice = {
   /** CSS family name. */
@@ -169,7 +343,9 @@ export function normalizeWorkspace(saved: Workspace): Workspace {
   return {
     ...saved,
     objects: saved.objects ?? [],
-    palette: Array.isArray(saved.palette) ? saved.palette.filter(isHexColor) : [...DEFAULT_PALETTE],
+    palette: Array.isArray(saved.palette)
+      ? saved.palette.filter(isHexColor)
+      : [...DEFAULT_PALETTE],
     penWidth: typeof saved.penWidth === "number" ? saved.penWidth : 3,
     penColor: isHexColor(saved.penColor) ? saved.penColor : undefined,
   }
@@ -315,7 +491,13 @@ export function addWhiteboardObject(
     x: 160 + (index % 3) * 290,
     y: 110 + Math.floor(index / 3) * 280,
     width:
-      kind === "kanban" ? 720 : kind === "document" ? 420 : kind === "text" ? 280 : 240,
+      kind === "kanban"
+        ? 720
+        : kind === "document"
+          ? 420
+          : kind === "text"
+            ? 280
+            : 240,
     height:
       kind === "kanban"
         ? 420
@@ -473,7 +655,11 @@ export type CommandResult = {
   confirm?: { type: "merge" | "revert"; id: string }
   clear?: boolean
 }
-export function execute(w: Workspace, input: string, center?: { x: number; y: number }): CommandResult {
+export function execute(
+  w: Workspace,
+  input: string,
+  center?: { x: number; y: number }
+): CommandResult {
   const tokens =
     input
       .match(/"[^"\n]*"|'[^'\n]*'|[^\s]+/g)
@@ -530,7 +716,8 @@ export function execute(w: Workspace, input: string, center?: { x: number; y: nu
     const next = addWhiteboardObject(
       w,
       aliases[args[0]],
-      args.slice(1).join(" "), center
+      args.slice(1).join(" "),
+      center
     )
     return {
       ...result(
@@ -623,7 +810,10 @@ export function execute(w: Workspace, input: string, center?: { x: number; y: nu
   if (verb === "label" && sub === "color") {
     const label = w.labels.find((l) => l.name === args.slice(0, -1).join(" "))
     if (!label) throw new Error("Create that label first.")
-    return result(setLabelColor(w, label.id, args.at(-1) ?? ""), "Label recolored.")
+    return result(
+      setLabelColor(w, label.id, args.at(-1) ?? ""),
+      "Label recolored."
+    )
   }
   if (verb === "label" && sub === "new") {
     const color = isHexColor(args.at(-1)) ? args.pop()!.toLowerCase() : w.accent

@@ -9,6 +9,69 @@
   background: var(--background);
   isolation: isolate;
 }
+.itemComments {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.itemComments h4 {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+.itemComments blockquote {
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: var(--muted);
+  border-left: 3px solid var(--primary);
+}
+.itemComments small {
+  font-size: 9px;
+  color: var(--muted-foreground);
+}
+.itemComments p {
+  color: var(--foreground);
+  white-space: pre-wrap;
+}
+.selectionPanel {
+  right: 16px;
+  top: 16px;
+  width: min(280px, calc(100% - 140px));
+  max-height: calc(100% - 85px);
+  overflow: auto;
+  padding: 14px;
+  font-size: 11px;
+}
+.selectionPanel > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.selectionPanel p {
+  margin: 8px 0;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.selectionPanel label {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+}
+.selectionPanel textarea {
+  min-height: 65px !important;
+}
+.selectionPanel select {
+  width: 100%;
+}
+.selectionDetails {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+}
+.selectionDetails > div {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
 .surface {
   position: absolute;
   inset: 0;

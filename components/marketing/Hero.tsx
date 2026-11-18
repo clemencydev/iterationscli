@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { UseTerminal } from "@/hooks/use-terminal";
+import Mandelbrot from "./Mandelbrot";
 
 
 function Hero() {
@@ -82,8 +83,9 @@ function Hero() {
 
   return (
     <div>
-      <div className="bg-white text-black dark:bg-black dark:text-white h-screen flex items-center justify-center">
-        <div className="flex items-center flex-col ">
+      <div className="relative isolate h-screen overflow-hidden bg-black text-white flex items-center justify-center">
+        <Mandelbrot />
+        <div className="relative z-10 flex items-center flex-col ">
           <div className="flex-col items-center">
             <div>
               <h1 className="text-5xl -mt-30">
@@ -95,7 +97,7 @@ function Hero() {
           <div className="flex gap-4 ">
             <Button onClick={scrollToFeatures}>Features</Button>
             <Button className=" " onClick={() => changeTerminalActive?.()}>Get Started</Button></div>
-          <div className="text-gray-500 mt-10">
+          <div className="text-gray-300 mt-10">
             Click Get Started or CTRL + Y to open the command window.
           </div>
         </div>

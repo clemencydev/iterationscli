@@ -768,7 +768,48 @@
 /* ---- Views ---- */
 .view {
   padding: 30px 28px 40px;
-  max-width: 1400px;
+  width: 100%;
+  max-width: none;
+}
+.canvasLinks {
+  margin: 16px 0 24px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+}
+.canvasLinks > button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  text-align: left;
+}
+.canvasLinks > button strong {
+  flex: 1;
+  overflow-wrap: anywhere;
+  font-weight: 400;
+}
+.canvasLinks > button span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.shell .comment {
+  padding: 14px 16px;
+  margin: 12px 0;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--alpha-accent);
+  border-radius: 5px;
+  white-space: pre-wrap;
+}
+.commentLabel {
+  display: block;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 9px;
+  margin-bottom: 9px;
 }
 .viewTitle {
   display: flex;
@@ -1319,6 +1360,76 @@
 .terminalPopup::backdrop {
   background: #00000066;
   backdrop-filter: blur(3px);
+}
+.floatingTerminal {
+  position: fixed;
+  z-index: 40;
+  width: min(760px, calc(100vw - 24px));
+  height: min(540px, calc(100dvh - 32px));
+  min-width: min(320px, calc(100vw - 24px));
+  min-height: 240px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  resize: both;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  background: var(--background);
+  box-shadow: 0 12px 50px #00000044;
+}
+.dockedTerminal {
+  display: flex;
+  flex-direction: column;
+  min-width: 280px;
+  overflow: hidden;
+}
+.floatingTerminal .popupBody,
+.dockedTerminal .popupBody {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.floatingTerminal .terminal,
+.dockedTerminal .terminal {
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+}
+.floatingTerminal .terminalBody,
+.dockedTerminal .terminalBody {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  max-height: none;
+}
+.dragTitlebar {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.terminalWindowControls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.shell .terminalWindowControls button,
+.shell .terminalWindowControls select {
+  font-size: 10px;
+  padding: 4px 6px;
+}
+.popupTitlebar {
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+@media (max-width: 760px) {
+  .split > .dockedTerminal {
+    height: 60dvh;
+    min-height: 300px;
+  }
 }
 .popupTitlebar {
   display: flex;

@@ -25,6 +25,7 @@ import {
   isHexColor,
   isWorkspace,
   linkObjectToTask,
+  ticketCanvasItems,
   mergeProposal,
   normalizeWorkspace,
   parseProposals,
@@ -59,6 +60,7 @@ import styles from "./workspace.module.css"
 import { useTheme } from "next-themes"
 import Link from "next/link"
 import Whiteboard from "./Whiteboard"
+import { applySelection } from "@/lib/canvas-selection"
 import Menu from "./Menu"
 import TrendChart from "./TrendChart"
 
@@ -93,7 +95,8 @@ const stamp = (w: WorkspaceData): WorkspaceData => ({
   ...w,
   updated: new Date().toISOString(),
 })
-const labelStyle = (label: Label) => ({ "--label": label.color }) as CSSProperties
+const labelStyle = (label: Label) =>
+  ({ "--label": label.color }) as CSSProperties
 
 export default function Workspace() {
   const { resolvedTheme, setTheme } = useTheme()
@@ -111,12 +114,34 @@ export default function Workspace() {
     y: (boardSize.current.height / 2 - boardCamera.y) / boardCamera.zoom,
   })
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalMode, setTerminalMode] = useState<
+    "modal" | "floating" | "split"
+  >("modal")
+  const [sidebarHidden, setSidebarHidden] = useState(false)
+  const [terminalPosition, setTerminalPosition] = useState({ x: 80, y: 80 })
+  const floatingTerminal = useRef<HTMLDivElement>(null)
+  const terminalDrag = useRef<{
+    x: number
+    y: number
+    left: number
+    top: number
+  } | null>(null)
+  const cycleTerminalMode = () => {
+    setTerminalMode((mode) =>
+      mode === "modal" ? "floating" : mode === "floating" ? "split" : "modal"
+    )
+    setTerminalOpen(true)
+  }
   const terminalDialog = useRef<HTMLDialogElement>(null)
   const mainPrompt = useRef<HTMLInputElement>(null)
   const popupPrompt = useRef<HTMLInputElement>(null)
   const popupEnd = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState("")
   const [selected, setSelected] = useState<string | null>(null)
+  const [canvasFocus, setCanvasFocus] = useState<{
+    id: string
+    request: number
+  } | null>(null)
   const [confirm, setConfirm] = useState<CommandResult["confirm"]>()
   const reviewedState = useRef<WorkspaceData | null>(null)
   const [command, setCommand] = useState("")
@@ -194,12 +219,30 @@ export default function Workspace() {
     popupEnd.current?.scrollIntoView({ block: "nearest" })
   }, [log])
   useEffect(() => {
-    if (terminalOpen) {
+    if (terminalOpen && terminalMode === "modal") {
       terminalDialog.current?.showModal()
+    } else terminalDialog.current?.close()
+    if (terminalOpen) {
       popupPrompt.current?.focus()
       popupEnd.current?.scrollIntoView({ block: "nearest" })
-    } else terminalDialog.current?.close()
-  }, [terminalOpen])
+    }
+  }, [terminalOpen, terminalMode])
+  useEffect(() => {
+    const clamp = () => {
+      const rect = floatingTerminal.current?.getBoundingClientRect()
+      if (!rect) return
+      setTerminalPosition((p) => ({
+        x: Math.max(0, Math.min(p.x, window.innerWidth - rect.width)),
+        y: Math.max(0, Math.min(p.y, window.innerHeight - 48)),
+      }))
+    }
+    const frame = requestAnimationFrame(clamp)
+    window.addEventListener("resize", clamp)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener("resize", clamp)
+    }
+  }, [terminalOpen, terminalMode])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
@@ -214,11 +257,36 @@ export default function Workspace() {
         event.preventDefault()
         setSelected(null)
         setTerminalOpen((open) => !open)
+        return
+      }
+      const typing =
+        event.target instanceof HTMLElement &&
+        !!event.target.closest(
+          "input,textarea,select,[contenteditable=true],[role=textbox]"
+        )
+      if (!typing && !event.ctrlKey && event.key.toLowerCase() === "m") {
+        event.preventDefault()
+        setTerminalMode((mode) =>
+          mode === "modal"
+            ? "floating"
+            : mode === "floating"
+              ? "split"
+              : "modal"
+        )
+        setTerminalOpen(true)
+      }
+      if (!typing && !event.ctrlKey && event.key === "Tab" && !event.shiftKey) {
+        event.preventDefault()
+        setSidebarHidden((hidden) => !hidden)
+      }
+      if (event.key === "Escape" && terminalOpen && terminalMode !== "modal") {
+        event.preventDefault()
+        setTerminalOpen(false)
       }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [ready])
+  }, [ready, terminalOpen, terminalMode])
   useEffect(() => {
     if (selected) dialog.current?.showModal()
     else dialog.current?.close()
@@ -402,7 +470,9 @@ export default function Workspace() {
       // Put the previous font back; the failed one may have been half-applied.
       void applyFont(font).catch(() => {})
       setFontMessage(
-        error instanceof Error ? error.message : "That font could not be loaded."
+        error instanceof Error
+          ? error.message
+          : "That font could not be loaded."
       )
     } finally {
       setFontBusy(false)
@@ -499,7 +569,9 @@ export default function Workspace() {
             ● ● ●
           </span>
           <span>iterations / personal workspace</span>
-          <span>{sync === "synced" || sync === "saving" ? "SYNCED" : "LOCAL"}</span>
+          <span>
+            {sync === "synced" || sync === "saving" ? "SYNCED" : "LOCAL"}
+          </span>
         </div>
         <div className={styles.terminalBody}>
           {!popup && (
@@ -767,10 +839,39 @@ export default function Workspace() {
           </p>
         )}
         <h2>
+          Linked whiteboard items{" "}
+          <small>{ticketCanvasItems(w, task.id).length}</small>
+        </h2>
+        <div className={styles.canvasLinks}>
+          {ticketCanvasItems(w, task.id).map((item) => (
+            <button
+              key={item.id}
+              onClick={() => {
+                setSelected(null)
+                setView("canvas")
+                setSplit(null)
+                setSplitTask(task.id)
+                setCanvasFocus({ id: item.id, request: Date.now() })
+              }}
+            >
+              <span>{item.kind}</span>
+              <strong>{item.title}</strong>
+              <span>Locate ↗</span>
+            </button>
+          ))}
+          {!ticketCanvasItems(w, task.id).length && (
+            <p className={styles.hint}>
+              Link a canvas item to this ticket to see it here automatically.
+            </p>
+          )}
+        </div>
+        <h2>
           Comments <small>{task.comments.length}</small>
         </h2>
+        <p className={styles.hint}>Discussion and feedback on this ticket.</p>
         {task.comments.map((c, i) => (
           <p className={styles.comment} key={i}>
+            <span className={styles.commentLabel}>◌ Comment {i + 1}</span>
             {c}
           </p>
         ))}
@@ -1052,6 +1153,13 @@ export default function Workspace() {
   function canvas() {
     return (
       <Whiteboard
+        focusItem={canvasFocus}
+        onSelectionAction={(selected, action) =>
+          change(
+            (w) => applySelection(w, selected, action),
+            `Canvas ${action.type} saved. Restore in History if needed.`
+          )
+        }
         camera={boardCamera}
         setCamera={setBoardCamera}
         onSize={(size) => {
@@ -1143,7 +1251,12 @@ export default function Workspace() {
     const percent = w.tasks.length
       ? Math.round((completed / w.tasks.length) * 100)
       : 0
-    const progress = (name: string, done: number, total: number, key: string) => (
+    const progress = (
+      name: string,
+      done: number,
+      total: number,
+      key: string
+    ) => (
       <div className={styles.progressRow} key={key}>
         <span>{name}</span>
         <progress max={total || 1} value={done} />
@@ -1197,7 +1310,9 @@ export default function Workspace() {
               <div className={styles.progressRow} key={l.id}>
                 {chip(l)}
                 <progress
-                  max={w.tasks.filter((t) => t.labels.includes(l.id)).length || 1}
+                  max={
+                    w.tasks.filter((t) => t.labels.includes(l.id)).length || 1
+                  }
                   value={
                     w.tasks.filter((t) => t.labels.includes(l.id) && t.done)
                       .length
@@ -1429,7 +1544,10 @@ export default function Workspace() {
                 {name}
               </button>
             ))}
-            <label className={styles.customAccent} data-active={w.theme === "custom"}>
+            <label
+              className={styles.customAccent}
+              data-active={w.theme === "custom"}
+            >
               <input
                 type="color"
                 value={w.accent}
@@ -1538,8 +1656,8 @@ export default function Workspace() {
           )}
           <p className={styles.hint}>
             Google fonts load from fonts.googleapis.com. Uploads accept .woff2,
-            .woff, .ttf and .otf up to 1.5 MB and stay on this device.
-            Animation respects reduced-motion preferences.
+            .woff, .ttf and .otf up to 1.5 MB and stay on this device. Animation
+            respects reduced-motion preferences.
           </p>
         </div>
         <div className={styles.panel}>
@@ -1670,6 +1788,97 @@ export default function Workspace() {
       </section>
     )
   }
+  function terminalWindow() {
+    return (
+      <>
+        <div
+          className={`${styles.popupTitlebar} ${terminalMode === "floating" ? styles.dragTitlebar : ""}`}
+          onPointerDown={(e) => {
+            if (
+              terminalMode !== "floating" ||
+              e.button !== 0 ||
+              (e.target as HTMLElement).closest("button,select")
+            )
+              return
+            e.preventDefault()
+            e.currentTarget.setPointerCapture(e.pointerId)
+            terminalDrag.current = {
+              x: e.clientX,
+              y: e.clientY,
+              left: terminalPosition.x,
+              top: terminalPosition.y,
+            }
+          }}
+          onPointerMove={(e) => {
+            const drag = terminalDrag.current,
+              rect = floatingTerminal.current?.getBoundingClientRect()
+            if (!drag || !rect) return
+            setTerminalPosition({
+              x: Math.max(
+                0,
+                Math.min(
+                  window.innerWidth - rect.width,
+                  drag.left + e.clientX - drag.x
+                )
+              ),
+              y: Math.max(
+                0,
+                Math.min(window.innerHeight - 48, drag.top + e.clientY - drag.y)
+              ),
+            })
+          }}
+          onPointerUp={() => {
+            terminalDrag.current = null
+          }}
+          onPointerCancel={() => {
+            terminalDrag.current = null
+          }}
+        >
+          <h2 id="workspace-terminal-title">&gt;_ Workspace terminal</h2>
+          <div className={styles.terminalWindowControls}>
+            <button
+              title="Cycle terminal mode (M outside text fields)"
+              onClick={cycleTerminalMode}
+            >
+              M
+            </button>
+            <select
+              aria-label="Terminal mode"
+              value={terminalMode}
+              onChange={(e) =>
+                setTerminalMode(e.target.value as typeof terminalMode)
+              }
+            >
+              <option value="modal">Active modal</option>
+              <option value="floating">Floating window</option>
+              <option value="split">Split pane</option>
+            </select>
+            <button
+              aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
+              onClick={() => setSidebarHidden((hidden) => !hidden)}
+            >
+              ☰
+            </button>
+            <button
+              className={styles.iconButton}
+              aria-label="Close workspace terminal"
+              onClick={() => setTerminalOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+        <div className={styles.popupBody}>
+          {terminalMode === "modal" && !sidebarHidden && sidebar(true)}
+          {terminal(true)}
+        </div>
+        <div className={styles.popupHint}>
+          M mode · Tab sidebar (outside inputs) · Tab complete in prompt ·
+          Ctrl+Y close
+        </div>
+      </>
+    )
+  }
   const render = (tab: View) =>
     ({ terminal, board, canvas, stats, inbox, history, settings })[tab]()
   const unopened = VIEWS.filter((v) => !tabs.includes(v))
@@ -1683,9 +1892,16 @@ export default function Workspace() {
         } as CSSProperties
       }
     >
-      {sidebar()}
+      {!sidebarHidden && sidebar()}
       <div className={styles.main}>
         <header className={styles.topbar}>
+          <button
+            aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
+            aria-expanded={!sidebarHidden}
+            onClick={() => setSidebarHidden((hidden) => !hidden)}
+          >
+            ☰
+          </button>
           <span>
             Workspace <span className={styles.muted}>/</span>{" "}
             <b>{names[view]}</b>
@@ -1788,7 +2004,7 @@ export default function Workspace() {
           </div>
         )}
         <div
-          className={`${styles.panes} ${paneTask || sideView ? styles.split : ""}`}
+          className={`${styles.panes} ${paneTask || sideView || (terminalOpen && terminalMode === "split") ? styles.split : ""}`}
         >
           <div
             className={`${styles.pane} ${view === "canvas" ? styles.canvasPane : ""}`}
@@ -1813,6 +2029,15 @@ export default function Workspace() {
               className={`${styles.pane} ${sideView === "canvas" ? styles.canvasPane : ""}`}
             >
               {render(sideView)}
+            </div>
+          )}
+          {ready && terminalOpen && terminalMode === "split" && (
+            <div
+              className={`${styles.pane} ${styles.dockedTerminal}`}
+              role="region"
+              aria-label="Terminal split pane"
+            >
+              {terminalWindow()}
             </div>
           )}
         </div>
@@ -1842,25 +2067,19 @@ export default function Workspace() {
           if (e.target === e.currentTarget) setTerminalOpen(false)
         }}
       >
-        <div className={styles.popupTitlebar}>
-          <h2 id="workspace-terminal-title">&gt;_ Workspace terminal</h2>
-          <button
-            className={styles.iconButton}
-            aria-label="Close workspace terminal"
-            onClick={() => setTerminalOpen(false)}
-          >
-            ×
-          </button>
-        </div>
-        <div className={styles.popupBody}>
-          {sidebar(true)}
-          {terminal(true)}
-        </div>
-        <div className={styles.popupHint}>
-          Tab complete · → accept suggestion · ↑↓ history · Ctrl+L clear ·
-          Ctrl+C cancel · Esc / Ctrl+Y close
-        </div>
+        {terminalOpen && terminalMode === "modal" && terminalWindow()}
       </dialog>
+      {ready && terminalOpen && terminalMode === "floating" && (
+        <div
+          ref={floatingTerminal}
+          className={styles.floatingTerminal}
+          role="region"
+          aria-label="Floating workspace terminal"
+          style={{ left: terminalPosition.x, top: terminalPosition.y }}
+        >
+          {terminalWindow()}
+        </div>
+      )}
       <dialog
         ref={dialog}
         className={styles.dialog}
