@@ -48,6 +48,20 @@ All Supabase access happens in server routes (`app/api/auth/*`,
 `app/api/kamako/*`) through `lib/supabase/client.ts`; `lib/supabase/env.ts`
 decides whether Supabase is configured.
 
+## Fractal background
+
+The marketing page sits on a real Mandelbrot deep zoom
+(`components/marketing/Mandelbrot.tsx`, WebGL2). Each reload picks a different
+destination from `lib/mandelbrot/presets.ts` and zooms from the whole set down
+to a minibrot, as deep as a span of 1e-38. Plain floats give out around 1e-13,
+so the centre's orbit is computed with BigInt fixed point
+(`lib/mandelbrot/math.ts`) and the shader iterates each pixel as a small
+difference from it (perturbation with rebasing).
+
+The destinations are found, not hand-typed:
+`node scripts/mandelbrot-presets.mjs` rewrites `presets.ts`
+(`--preview <dir>` also writes PNG stills of each zoom).
+
 ## Terminal completion
 
 Both terminals complete commands, subcommands and arguments from the command

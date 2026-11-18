@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Button } from "../ui/button";
 import { UseTerminal } from "@/hooks/use-terminal";
-import Mandelbrot from "./Mandelbrot";
+import { fractalStore } from "./fractal-store";
 
 
 function Hero() {
@@ -83,8 +83,12 @@ function Hero() {
 
   return (
     <div>
-      <div className="relative isolate h-screen overflow-hidden bg-black text-white flex items-center justify-center">
-        <Mandelbrot />
+      <div data-fractal-window className="relative isolate h-screen overflow-hidden text-white flex items-center justify-center">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.6),rgba(0,0,0,0)_70%)]"
+        />
+        <FractalControls />
         <div className="relative z-10 flex items-center flex-col ">
           <div className="flex-col items-center">
             <div>
@@ -102,6 +106,31 @@ function Hero() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+const SERVER_SNAPSHOT = { paused: false, label: "" };
+
+// Where the background zoom currently is, and a way to stop it.
+function FractalControls() {
+  const { paused, label } = useSyncExternalStore(
+    fractalStore.subscribe,
+    fractalStore.get,
+    () => SERVER_SNAPSHOT
+  );
+  return (
+    <div className="absolute right-5 bottom-5 z-10 flex items-center gap-3 font-mono text-[10px]">
+      <span aria-hidden="true" className="text-white/50 tabular-nums">{label}</span>
+      <button
+        type="button"
+        onClick={fractalStore.togglePaused}
+        aria-pressed={paused}
+        aria-label={paused ? "Resume fractal animation" : "Pause fractal animation"}
+        className="border border-white/20 bg-black/60 px-3 py-2 text-white/70 hover:text-white focus-visible:outline-2 focus-visible:outline-white"
+      >
+        {paused ? "▶ Resume" : "Ⅱ Pause"} zoom
+      </button>
     </div>
   );
 }
