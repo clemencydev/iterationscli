@@ -1,0 +1,44 @@
+The LaTeX compiler in this folder
+=================================
+
+latex-engine.js
+    A small wrapper written for this project around the Siglum engine.
+
+siglum-engine.js, siglum-worker.js
+    @siglum/engine 0.2.2, with @siglum/filesystem and xzwasm, bundled.
+    https://github.com/SiglumProject/siglum
+    MIT License. Copyright (c) 2026 Siglum Project.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+releases/<id>/wasm/busytex.wasm (present only after `npm run latex:assets`)
+    pdfTeX and the rest of TeX Live 2026 compiled to WebAssembly by the Siglum
+    Project's fork of BusyTeX (https://github.com/SiglumProject/busytex).
+    TeX Live's programs are free software under the GNU General Public
+    License, version 2 or later, with libraries under the LGPL, MIT and
+    similar licenses. If you serve this file from your own site you are
+    distributing it: keep this notice, and point to the corresponding source,
+    which is that repository at the commit the release was built from together
+    with the TeX Live 2026 sources (https://tug.org/texlive/).
+
+releases/<id>/*.data.gz and packages fetched while compiling
+    Files from TeX Live 2026: LaTeX packages and fonts, most under the LaTeX
+    Project Public License, some under the GPL (cm-super) or the SIL Open Font
+    License (Font Awesome and other fonts). Each package's own license is in
+    its documentation on CTAN (https://ctan.org/).

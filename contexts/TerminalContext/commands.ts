@@ -2,6 +2,7 @@ import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.share
 import { LoginHandler, LogoutHandler, RegisterHandler, SettingHandler } from "./handlers/auth/handlers";
 import { TerminalContextValue } from "@/types/terminal";
 import { Dispatch, SetStateAction } from "react";
+import { SCHEMES } from "@/lib/themes";
 
 export type CommandName =
   | "workspace"
@@ -83,11 +84,18 @@ export const Commands: Record<CommandName, Command> = {
 
 // The alpha workspace terminal (lib/alpha.ts `execute`) described in the same
 // shape, so lib/completion.ts can complete commands, subcommands and arguments.
-const VIEW_NAMES = ["terminal", "board", "canvas", "stats", "inbox", "history", "settings"];
+const VIEW_NAMES = ["terminal", "board", "canvas", "files", "annotate", "latex", "stats", "inbox", "history", "settings"];
+const THEME_NAMES = ["list", "default", ...SCHEMES.map((scheme) => scheme.id), "phosphor", "amber", "violet"];
 const text = (name: string): CommandArguement => ({ name, descriprion: `"${name}"` });
 const task: CommandArguement = { name: "task-id", descriprion: "<task-id>", source: "task" };
 const column: CommandArguement = { name: "column", descriprion: '"Column"', source: "column" };
 const label: CommandArguement = { name: "label", descriprion: '"Label"', source: "label" };
+const file: CommandArguement = { name: "file-id", descriprion: "<file-id>", source: "file" };
+const folder: CommandArguement = { name: "folder", descriprion: '"Folder"', source: "folder" };
+const node: CommandArguement = { name: "node", descriprion: '"Node"', source: "node" };
+const hex = (reset = true): CommandArguement =>
+  reset ? { name: "color", descriprion: "#hex|reset", values: ["reset"] } : { name: "color", descriprion: "[#hex]" };
+const item: CommandArguement = { name: "item", descriprion: "<item number>" };
 const local = (name: string, usage: string, args?: CommandArguement[]): Command =>
   ({ name, usage, auth_required: false, args });
 const group = (name: string, usage: string, commands: Command[]): Command => ({
@@ -116,6 +124,56 @@ export const WorkspaceCommands: Record<string, Command> = {
     local("new", "Add a column", [text("name")]),
     local("rename", "Rename a column", [column, text("new name")]),
     local("delete", "Delete a column", [column]),
+    local("color", "Color of the column's completion bar", [column, hex()]),
+  ]),
+  check: group("check", "Checklist inside a ticket", [
+    local("list", "Print a ticket's checklist", [task]),
+    local("add", "Add a step to a ticket", [task, text("step")]),
+    local("done", "Tick a step", [task, item]),
+    local("undo", "Untick a step", [task, item]),
+    local("remove", "Remove a step", [task, item]),
+  ]),
+  node: group("node", "Nodes that combine the completion of columns", [
+    local("list", "List nodes with their combined completion"),
+    local("new", "Create a node connected to columns", [text("name"), column, column, column]),
+    local("connect", "Connect a node to a column", [node, column, column]),
+    local("disconnect", "Disconnect a node from a column", [node, column]),
+    local("color", "Color of the node's bar", [node, hex()]),
+    local("rename", "Rename a node", [node, text("new name")]),
+    local("delete", "Delete a node", [node]),
+  ]),
+  progress: local("progress", "Every column's completion with each ticket's share"),
+  files: local("files", "List files; a filter searches every folder", [text("filter")]),
+  folder: group("folder", "Folders in the file explorer", [
+    local("list", "List folders"),
+    local("new", "Create a folder", [text("name"), hex(false), folder]),
+    local("color", "Color a folder", [folder, hex()]),
+    local("rename", "Rename a folder", [folder, text("new name")]),
+    local("ticket", "Make a folder a ticket's folder", [
+      folder,
+      { name: "task-id", descriprion: "<task-id>|none", source: "task" },
+    ]),
+    local("delete", "Delete a folder (its contents move up)", [folder]),
+  ]),
+  tex: group("tex", "LaTeX documents", [
+    local("templates", "List the templates a document can start from"),
+    local("new", "Start a document from a template", [
+      text("name"),
+      { name: "template", descriprion: "[template]", source: "template" },
+    ]),
+    local("list", "List documents and their files"),
+    local("open", "Open a document or file in the LaTeX editor", [
+      { name: "document", descriprion: "<file-id or document>", source: "texfile" },
+    ]),
+  ]),
+  file: group("file", "Files in the explorer", [
+    local("list", "List files"),
+    local("open", "Open a file in Annotate", [file]),
+    local("tie", "Tie a file to a ticket", [file, task]),
+    local("untie", "Untie a file from a ticket", [file, task]),
+    local("move", "Move a file to a folder (/ is the top level)", [file, folder]),
+    local("rename", "Rename a file", [file, text("new name")]),
+    local("delete", "Delete a file", [file]),
   ]),
   label: group("label", "Create, color and attach labels", [
     local("list", "List labels"),
@@ -135,6 +193,7 @@ export const WorkspaceCommands: Record<string, Command> = {
       local("kanban", "Task board"),
       local("arrow", "Arrow", [text("label")]),
       local("link", "Ticket link node", [task]),
+      local("file", "A file from the explorer", [file]),
     ]),
     local("list", "List canvas items, arrows and drawings with their IDs"),
     local("name", "Name a drawing (a group of pen strokes)", [
@@ -188,8 +247,8 @@ export const WorkspaceCommands: Record<string, Command> = {
   only: local("only", "Close every pane but this one"),
   undo: local("undo", "Undo the last change (Ctrl+Z)"),
   redo: local("redo", "Redo what was undone (Ctrl+Shift+Z)"),
-  theme: local("theme", "Switch the accent palette", [
-    { name: "theme", descriprion: "<theme>", values: ["original", "phosphor", "amber", "violet"] },
+  theme: local("theme", "Switch the site theme (a terminal color scheme)", [
+    { name: "theme", descriprion: "<theme>", values: THEME_NAMES },
   ]),
   checkpoint: local("checkpoint", "Save a named restore point", [text("description")]),
   revert: local("revert", "Restore a checkpoint (asks Y/N)", [

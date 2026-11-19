@@ -1,0 +1,382 @@
+/* The Files view and the file thumbnails used across the workspace. Lives
+   inside the workspace shell and uses its tokens (--alpha-accent, --line,
+   --dim, --surface, --hover) plus the site theme's. */
+
+/* ---- Thumbnails ---- */
+.thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  border-radius: var(--radius);
+}
+.thumb > :is(svg, img) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.glyph {
+  color: var(--dim);
+  font-size: 20px;
+  line-height: 1;
+}
+.glyph[data-kind="video"] {
+  color: #60a5fa;
+}
+.glyph[data-kind="audio"] {
+  color: #c084fc;
+}
+.glyph[data-kind="pdf"] {
+  color: #f87171;
+}
+
+/* ---- Explorer ---- */
+.explorer {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.explorer[data-over] {
+  outline: 2px dashed var(--alpha-accent);
+  outline-offset: -6px;
+}
+.tree {
+  width: 230px;
+  flex-shrink: 0;
+  padding: 14px 8px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.explorer .all,
+.explorer .treeName,
+.explorer .twist,
+.explorer button.caption {
+  border-color: transparent;
+  background: transparent;
+}
+.explorer .all {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 8px;
+  text-align: left;
+}
+.all[aria-current],
+.treeRow[data-active] {
+  background: var(--hover);
+  box-shadow: inset 2px 0 0 var(--alpha-accent);
+}
+.all[data-over],
+.treeRow[data-over] {
+  outline: 1px dashed var(--alpha-accent);
+}
+.caption {
+  display: block;
+  margin: 16px 0 4px !important;
+  padding: 0 8px;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 1.2px;
+}
+.explorer button.caption {
+  width: 100%;
+  padding: 2px 8px;
+  text-align: left;
+  font-size: 10px;
+}
+.treeRow {
+  display: flex;
+  align-items: center;
+}
+.treeRow[data-ghost] .treeName {
+  color: var(--dim);
+}
+.explorer .twist {
+  width: 18px;
+  padding: 0;
+  flex-shrink: 0;
+  color: var(--dim);
+  text-align: center;
+}
+span.twist {
+  display: inline-block;
+}
+.explorer .treeName {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px 4px 2px;
+  text-align: left;
+}
+.treeName span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: var(--dim);
+}
+.none {
+  padding: 2px 8px;
+  color: var(--dim);
+  font-size: 11px;
+}
+.usage {
+  margin-top: 20px !important;
+  padding: 0 8px;
+  color: var(--dim);
+  font-size: 10px;
+}
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: 26px 26px 40px;
+  overflow: auto;
+}
+@container (max-width: 640px) {
+  .explorer {
+    flex-direction: column;
+    overflow: auto;
+  }
+  .tree {
+    width: auto;
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .main {
+    overflow: visible;
+    padding: 18px 14px 30px;
+  }
+}
+.head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.explorer .head h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+.head h1 .dot {
+  width: 14px;
+  height: 14px;
+}
+.eyebrow {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px !important;
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+.toolbar > input {
+  flex: 1;
+  min-width: 160px;
+}
+.import {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: var(--radius);
+  background: var(--alpha-accent);
+  color: var(--background);
+  font-weight: 600;
+  cursor: pointer;
+}
+.import:focus-within {
+  outline: 2px solid var(--alpha-accent);
+  outline-offset: 2px;
+}
+.import input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.folderBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.folderBar select {
+  max-width: 220px;
+}
+.colors {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.explorer .colors button:not(.reset) {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 3px;
+}
+.explorer .colors button[aria-pressed="true"] {
+  outline: 2px solid var(--foreground);
+  outline-offset: 1px;
+}
+.explorer .colors input[type="color"] {
+  width: 26px;
+  height: 22px;
+}
+.explorer .reset {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+.explorer .danger {
+  margin-left: auto;
+  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--destructive) 40%, transparent);
+  background: transparent;
+}
+.folders,
+.files {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.folders {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+}
+.explorer .folders button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+}
+.folders button span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folders button[data-over] {
+  outline: 1px dashed var(--alpha-accent);
+}
+.file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  background: var(--card);
+}
+.explorer .open {
+  padding: 0;
+  border: 0;
+  background: none;
+  flex-shrink: 0;
+}
+.fileThumb {
+  width: 56px;
+  height: 44px;
+}
+.fileText {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.explorer .fileName {
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer .fileName:hover {
+  background: none;
+  color: var(--alpha-accent);
+}
+.fileText small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.explorer .tags button {
+  max-width: 180px;
+  padding: 0 6px;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer .move {
+  max-width: 150px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+@container (max-width: 520px) {
+  .explorer .move {
+    display: none;
+  }
+}
+.explorer .more {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex-shrink: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dim);
+}
+.empty {
+  margin-top: 16px;
+  padding: 44px 20px;
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+.empty span {
+  display: block;
+  margin-top: 8px;
+  color: var(--dim);
+  font-size: 11px;
+}

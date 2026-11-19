@@ -9,6 +9,9 @@ import {
   type WhiteboardObject,
   type Task,
 } from "@/lib/alpha"
+import { fileKind, formatBytes, type FileEntry } from "@/lib/files"
+import { describeAnnotation } from "@/lib/annotations"
+import { FileThumb } from "./Shapes"
 import styles from "./whiteboard.module.css"
 import BoardIcon from "./BoardIcon"
 import DocumentEditor from "./DocumentEditor"
@@ -25,6 +28,7 @@ const NAMES: Record<WhiteboardObject["kind"], string> = {
   document: "document",
   text: "text",
   link: "ticket link",
+  file: "file",
 }
 
 export default function BoardObject({
@@ -40,6 +44,8 @@ export default function BoardObject({
   onConnectHover,
   onLinkTicket,
   onOpenTask,
+  files,
+  onOpenFile,
 }: {
   item: WhiteboardObject
   zoom: number
@@ -59,6 +65,9 @@ export default function BoardObject({
   /** Adds a ticket link node connected to this item. */
   onLinkTicket: () => void
   onOpenTask: (id: string) => void
+  files: FileEntry[]
+  /** Opens a file in Annotate. */
+  onOpenFile: (id: string) => void
 }) {
   const drag = useRef<{
     x: number
@@ -286,6 +295,8 @@ export default function BoardObject({
   const bare = item.kind === "sticky" || item.kind === "text"
   const linked =
     item.kind === "link" ? tasks.find((t) => t.id === item.taskId) : undefined
+  const file =
+    item.kind === "file" ? files.find((f) => f.id === item.fileId) : undefined
   const header = (
     <div className={styles.objectHeader}>
       <button
@@ -311,7 +322,9 @@ export default function BoardObject({
               ? "Task board"
               : item.kind === "link"
                 ? "Ticket"
-                : "Document"}
+                : item.kind === "file"
+                  ? "File"
+                  : "Document"}
           </span>
         )}
       </button>
@@ -380,6 +393,22 @@ export default function BoardObject({
           {tasks.map((t) => (
             <option key={t.id} value={t.id}>
               {t.title}
+            </option>
+          ))}
+        </select>
+      )}
+      {item.kind === "file" && (
+        <select
+          className={styles.linkPicker}
+          aria-label="File shown"
+          title="Choose the file this node shows"
+          value={file?.id ?? ""}
+          onChange={(e) => onChange({ fileId: e.target.value || undefined })}
+        >
+          <option value="">Choose file…</option>
+          {files.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
             </option>
           ))}
         </select>
@@ -507,6 +536,33 @@ export default function BoardObject({
             text={item.text}
             onChange={(html, text) => onChange({ html, text })}
           />
+        ) : item.kind === "file" ? (
+          file ? (
+            <button
+              className={styles.fileOpen}
+              onClick={() => onOpenFile(file.id)}
+              title="Open this file in Annotate"
+            >
+              <FileThumb file={file} className={styles.fileShown} />
+              <span className={styles.linkText}>
+                <strong>{file.name}</strong>
+                <small>
+                  {fileKind(file.mime, file.name)} · {formatBytes(file.size)}
+                  {describeAnnotation(file.annotation)
+                    ? ` · ${describeAnnotation(file.annotation)}`
+                    : ""}
+                </small>
+              </span>
+            </button>
+          ) : (
+            <p className={styles.linkEmpty}>
+              {item.fileId
+                ? "This file is no longer in the explorer. Choose another above."
+                : files.length
+                  ? "Choose a file above. Clicking this node then opens it in Annotate."
+                  : "No files yet. Import some in Files first."}
+            </p>
+          )
         ) : item.kind === "link" ? (
           linked ? (
             <button

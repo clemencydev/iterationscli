@@ -21,6 +21,14 @@ import {
   isShell,
   type ShellFlavor,
 } from "@/lib/shell"
+import {
+  DEFAULT_SCHEME,
+  findScheme,
+  isDefaultScheme,
+  schemeList,
+  SCHEMES,
+} from "@/lib/themes"
+import { useSiteScheme } from "@/lib/theme-client"
 import ShellTerminal, { type LogEntry } from "./alpha/ShellTerminal"
 import styles from "./entry-terminal.module.css"
 
@@ -34,6 +42,8 @@ const HELP = `login / register   Sign in or create an account here
 workspace          Open the local alpha
 dashboard          Open your account board
 settings / logout  Account actions
+theme list         Site themes: the color schemes a terminal ships with
+theme <name>       Switch the whole site, e.g. theme campbell-powershell
 menu               Show selectable actions
 clear (cls)        Clear the output
 exit               Close this terminal
@@ -61,6 +71,7 @@ export default function EntryTerminal({
 }) {
   const { user, checkSession } = useAuthenticate()
   const router = useRouter()
+  const [scheme, chooseScheme] = useSiteScheme()
   // The visitor's own shell, or the one they chose in the workspace. This
   // dialog only ever opens in the browser, so reading it here is safe.
   const [flavor] = useState<ShellFlavor>(() => {
@@ -116,6 +127,17 @@ export default function EntryTerminal({
         }
     for (const [command, usage] of SHELL_COMMANDS)
       commands[command] ??= { name: command, usage }
+    commands.theme ??= {
+      name: "theme",
+      usage: "Switch the site theme",
+      args: [
+        {
+          name: "theme",
+          descriprion: "<theme>",
+          values: ["list", "default", ...SCHEMES.map((s) => s.id)],
+        },
+      ],
+    }
     return commands
   }, [signedIn])
   const completion = useCompletion(input, setInput, registry, undefined, !busy)
@@ -131,6 +153,23 @@ export default function EntryTerminal({
 
   async function run(raw: string) {
     if (busy) return
+    // The site theme is the one thing here that takes an argument.
+    const themed = /^theme(?:\s+(.*))?$/i.exec(raw.trim())
+    if (themed) {
+      setInput("")
+      const name = (themed[1] ?? "").replace(/^["']|["']$/g, "").trim()
+      print({ kind: "command", prompt, text: raw.trim() })
+      if (!name || name.toLowerCase() === "list")
+        return write(`${schemeList(scheme)}\nSwitch with theme <name>.`)
+      const found = findScheme(name)
+      if (!found && !isDefaultScheme(name))
+        return print({
+          kind: "error",
+          text: "Unknown theme. `theme list` shows them all.",
+        })
+      chooseScheme(found?.id ?? DEFAULT_SCHEME)
+      return write(`Theme: ${found?.name ?? "default"}.`)
+    }
     const command = parseEntryCommand(raw)
     setInput("")
     if (!command) {

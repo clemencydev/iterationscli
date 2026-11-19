@@ -35,3 +35,7 @@ pnpm-debug.log*
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+# the TeX runtime and mirrored packages (npm run latex:assets / latex:packages)
+/public/latex/releases/
+/public/latex/pkgs/

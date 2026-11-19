@@ -59,6 +59,11 @@ function ThemeHotkey() {
         return
       }
 
+      // A site theme (lib/themes.ts) decides light or dark itself.
+      if (document.documentElement.dataset.scheme) {
+        return
+      }
+
       setTheme(resolvedTheme === "dark" ? "light" : "dark")
     }
 

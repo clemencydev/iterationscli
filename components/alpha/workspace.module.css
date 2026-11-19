@@ -1504,3 +1504,267 @@
 .view:focus {
   outline: none;
 }
+
+/* Views that manage their own scrolling and fill the pane (Files, Annotate). */
+.fillPane {
+  display: flex;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+/* ---- Ticket: checklist and files ---- */
+.taskProgress,
+.ticketSteps {
+  position: relative;
+  height: 6px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  border-radius: 3px;
+}
+.taskProgress {
+  margin: 4px 44px 12px 0;
+}
+.taskProgress i,
+.ticketSteps i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--alpha-accent);
+  transition: width 0.2s;
+}
+.taskProgress span {
+  position: absolute;
+  right: -44px;
+  top: -7px;
+  width: 38px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--dim);
+}
+.ticketSteps {
+  height: 3px;
+  margin: 8px 0 2px;
+}
+.checkItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.shell .checkItem input:not([type="checkbox"]) {
+  flex: 1;
+  padding: 4px 8px;
+  border-color: transparent;
+  background: transparent;
+}
+.shell .checkItem input:not([type="checkbox"]):is(:hover, :focus) {
+  border-color: var(--line);
+}
+.checkForm {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.checkForm input {
+  flex: 1;
+}
+.ticketFiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+.shell .ticketFiles button {
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  text-align: left;
+  font-size: 11px;
+}
+.ticketFiles button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticketFileThumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+}
+
+/* ---- Column completion bar ---- */
+.columnFoot {
+  --bar: var(--alpha-accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.segments,
+.nodeBar {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.segments i,
+.nodeBar i {
+  flex: 1 1 0;
+  min-width: 2px;
+  height: 100%;
+  background: color-mix(in srgb, var(--bar) 22%, transparent);
+}
+.segments b,
+.nodeBar b {
+  display: block;
+  height: 100%;
+  background: var(--bar);
+  transition: width 0.2s;
+}
+.columnFoot strong,
+.nodeTop strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bar);
+  font-variant-numeric: tabular-nums;
+}
+.shell :is(.columnFoot, .nodeTop) input[type="color"] {
+  width: 22px;
+  height: 20px;
+  padding: 1px;
+}
+.nodeChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--dim);
+}
+.nodeChips span {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* ---- Progress nodes ---- */
+.nodes {
+  margin-top: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.nodesHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.shell .nodesHead h2 {
+  margin: 0;
+}
+.nodesHead form {
+  display: flex;
+  gap: 8px;
+}
+.node {
+  --bar: var(--alpha-accent);
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--bar);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.nodeTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.nodeTop h3,
+.nodeTop form {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell .nodeTop form input {
+  width: 100%;
+  padding: 3px 7px;
+}
+.nodeMark {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  transform: rotate(45deg);
+  background: var(--bar);
+}
+.nodeBar {
+  height: 10px;
+  flex: none;
+}
+.nodeColumns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.shell .nodeColumns button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* ---- Site themes ---- */
+.schemes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 14px 0 0;
+}
+.shell .scheme {
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  text-align: left;
+  font-size: 11px;
+}
+.shell .scheme[aria-pressed="true"] {
+  outline: 2px solid var(--alpha-accent);
+  outline-offset: 1px;
+}
+.schemePreview,
+.schemeDefault {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 52px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+}
+.schemeDefault {
+  background: linear-gradient(135deg, #ffffff 50%, #09090b 50%);
+  color: #71717a;
+}
+.schemePreview b,
+.schemeDefault b {
+  font-weight: 500;
+}
+.schemePreview > span {
+  display: flex;
+  gap: 4px;
+}
+.schemePreview i {
+  width: 12px;
+  height: 6px;
+}

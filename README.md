@@ -3,7 +3,7 @@
 A personal terminal, task board and whiteboard. Next.js 16, React 19, Tailwind 4.
 
 - `/` — marketing page and the entry terminal (Ctrl+Y)
-- `/alpha` — the workspace: terminal, task board, canvas, statistics, incoming, history, customize
+- `/alpha` — the workspace: terminal, task board, canvas, files, annotate, LaTeX, statistics, incoming, history, customize
 - `/dashboard` — the signed-in account board
 
 ## Develop
@@ -24,6 +24,13 @@ account and no backend. When Supabase is configured **and** you are signed in,
 the same workspace is also mirrored to your account through
 `/api/kamako/workspace`, and picked up on other devices. The status bar says
 which mode is active.
+
+Imported files are different: only their descriptions (name, folder, ticket,
+annotation) live in the workspace. Their contents stay in the browser they were
+imported in (IndexedDB, `lib/file-store.ts`), so on another device a file is
+listed but has nothing to show. [docs/storage-cost-analysis.md](docs/storage-cost-analysis.md)
+compares what it would cost to store them, and the workspace, on Supabase or
+on DynamoDB.
 
 ## Supabase
 
@@ -47,6 +54,100 @@ account".
 All Supabase access happens in server routes (`app/api/auth/*`,
 `app/api/kamako/*`) through `lib/supabase/client.ts`; `lib/supabase/env.ts`
 decides whether Supabase is configured.
+
+## Site themes
+
+`lib/themes.ts` holds the color schemes a terminal ships with: the ones in
+Windows Terminal's defaults (which PowerShell runs in) and Ubuntu's. Choosing
+one in Customize, or with `theme <name>` in either terminal (`theme list`
+shows them), restyles the whole site: the design tokens in `app/globals.css`
+are derived from the scheme's background, foreground and ANSI colors
+(`schemeTokens`), the terminal takes the scheme's own colors, and the
+landing-page fractal is drawn between its two ends. `theme default` is the
+site's own look and sets nothing. The choice is kept per device
+(`lib/theme-client.ts`) and applied by a small script in `app/layout.tsx`
+before the first paint. `theme phosphor|amber|violet` still changes only the
+workspace's accent color.
+
+## Tickets, columns and nodes
+
+- A ticket has a **checklist** (`check add|done|undo|remove`, or in the
+  ticket). Its percentage is the share of steps ticked; a completed ticket is
+  100%.
+- Every column ends in a **completion bar**: one segment per ticket, each
+  filled as far as that ticket has come, with the column's average beside it.
+  The bar's color is picked beside it or with `column color "Column" #hex`.
+- A **progress node** connects to several columns and shows their completion
+  combined, every ticket counted once: `node new "Release" "In progress"
+  "Done"`, `node connect|disconnect|color|rename|delete`. `progress` prints
+  all of it. The arithmetic is in `lib/progress.ts`.
+
+## Files and annotations
+
+- **Files** (`components/alpha/FileExplorer.tsx`, `lib/files.ts`): import any
+  file; make folders, nest them, color them (`folder new|color|rename|ticket|
+  delete`). Every ticket has a folder of its own, made the first time
+  something goes in it, and a file can also be tied to tickets from anywhere
+  (`file tie`). The filter looks through every folder at once (`files
+  "text"`).
+- **Annotate** (`components/alpha/Annotator.tsx`, `lib/annotations.ts`):
+  - Images: pen, lines, arrows, boxes, ellipses, text and numbered comments.
+  - Video: on-screen text, splits and cut sections on a timeline. Nothing is
+    re-encoded; the changes export as a CSV (every change), a CMX 3600 EDL
+    (the cuts as a timeline for Premiere Pro, DaVinci Resolve and others) and
+    an SRT (the text as captions).
+  - Audio: comments at a moment of the recording (work in progress).
+  - Everything else: notes, with a preview for text and PDF.
+- Saving an annotation leaves the original alone and stores a **copy** beside
+  it in Files, tied to the same tickets and placed next to the original on the
+  canvas. A video's copy comes with its edits as a `.edits.csv` file.
+- A file can be put on the **canvas** (`wb add file <file-id>`, or "Place on
+  canvas"); clicking it there opens it in Annotate.
+
+## LaTeX
+
+The LaTeX view (`components/alpha/LatexEditor.tsx`) is an editor in the manner
+of Overleaf: source on the left, the typeset PDF on the right, compiled in the
+browser. Nothing you write is sent anywhere.
+
+- **A document is a folder in Files**: its main `.tex` file and whatever that
+  pulls in (chapters, images, a `.bib`, a `.cls`), referred to by their paths
+  inside the folder. Start one from a template (resumes, CV, cover letter,
+  letter, article, report, slides, notes), import existing `.tex` files, or
+  `tex new "Name" [template]` in the terminal (`tex templates`, `tex list`,
+  `tex open`).
+- **The compiler** is pdfLaTeX from TeX Live 2026, compiled to WebAssembly (the
+  [Siglum](https://github.com/SiglumProject/siglum) engine, MIT; see
+  `public/latex/THIRD_PARTY.txt`) and run in a Web Worker by
+  `lib/latex-engine.ts`. It runs the extra passes and BibTeX itself. Any
+  package in TeX Live works: it is fetched the first time a document loads it
+  and kept in the browser. The Packages tab is a searchable catalog that writes
+  the `\usepackage` line; the Fonts tab does the same for 19 font choices, each
+  checked against this compiler.
+- **Editing** (`LatexSource.tsx`, CodeMirror 6): highlighting, completion for
+  commands, environments, packages, labels, citation keys and file names,
+  Ctrl+Enter or Ctrl+S to compile, and it compiles by itself after a pause in
+  typing. What TeX reports is read by `parseLog` in `lib/latex.ts` and shown in
+  plain words with the line marked. The preview (`PdfView.tsx`, pdf.js) keeps
+  its place across compiles. "Save PDF to Files" puts the PDF beside the
+  document, where it can be tied to a ticket or placed on the canvas.
+- **Not there**: XeLaTeX and LuaLaTeX (so no fontspec and no font files of
+  your own), Biber (use `backend=bibtex` with biblatex), and anything that
+  needs shell escape, such as minted.
+
+The engine's runtime is about 50 MB on first use (plus 60 MB of fonts the
+first time a document uses T1 Computer Modern without `lmodern`), then cached
+by the browser. By default it is downloaded from the engine project's own file
+server, as are packages. To serve the runtime from this site instead:
+
+```bash
+npm run latex:assets     # ~127 MB into public/latex/releases (git-ignored)
+npm run latex:packages   # optional: mirror common packages into public/latex/pkgs
+```
+
+The app uses `public/latex/releases` when it is there. For packages, set
+`NEXT_PUBLIC_LATEX_PACKAGES=/latex/pkgs` to use the mirror; only mirrored
+packages resolve then.
 
 ## Fractal background
 

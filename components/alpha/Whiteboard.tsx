@@ -1,4 +1,5 @@
 "use client"
+import type { FileEntry } from "@/lib/files"
 
 import {
   useEffect,
@@ -62,6 +63,7 @@ const CREATE: [WhiteboardObject["kind"], string, string][] = [
     "Ticket",
     "Add a ticket link. Clicking it opens the ticket beside the canvas",
   ],
+  ["file", "File", "Add a file from the explorer. Clicking it opens Annotate"],
 ]
 
 export default function Whiteboard({
@@ -80,6 +82,8 @@ export default function Whiteboard({
   objects,
   tasks,
   columns,
+  files,
+  onOpenFile,
   onObjectChange,
   onObjectDelete,
   onObjectAdd,
@@ -116,6 +120,9 @@ export default function Whiteboard({
   objects: WhiteboardObject[]
   tasks: Task[]
   columns: string[]
+  /** The explorer's files, for file nodes. */
+  files: FileEntry[]
+  onOpenFile: (id: string) => void
   onObjectChange: (id: string, patch: Partial<WhiteboardObject>) => void
   onObjectDelete: (id: string) => void
   onObjectAdd: (kind: WhiteboardObject["kind"]) => void
@@ -596,6 +603,8 @@ export default function Whiteboard({
               onConnectHover={setConnectTarget}
               onLinkTicket={() => onLinkTicket(item.id)}
               onOpenTask={onOpenTask}
+              files={files}
+              onOpenFile={onOpenFile}
             />
           ))}
           {selectedBounds && !marquee && tool === "select" && (

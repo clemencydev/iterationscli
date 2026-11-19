@@ -59,6 +59,22 @@
   --t-font: "SF Mono", Menlo, Monaco, var(--font-mono), monospace;
   font-size: 13px;
 }
+/* A site theme (lib/themes.ts) is a terminal color scheme, so the terminal
+   wears it too, whichever shell it is dressed as. */
+:global(html[data-scheme]) .terminal,
+:global(html[data-scheme]) .terminal[data-shell] {
+  --t-bg: var(--scheme-bg);
+  --t-fg: var(--scheme-fg);
+  --t-dim: var(--scheme-dim);
+  --t-bar: var(--scheme-bar);
+  --t-bar-fg: var(--scheme-bar-fg);
+  --t-select: var(--scheme-select);
+  --t-error: var(--scheme-error);
+  --t-user: var(--scheme-user);
+  --t-path: var(--scheme-path);
+  --t-command: var(--scheme-command);
+  --t-string: var(--scheme-string);
+}
 .terminal ::selection {
   background: var(--t-select);
 }

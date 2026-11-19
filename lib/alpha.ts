@@ -1,3 +1,57 @@
+import {
+  addChecklistItem,
+  addNode,
+  bar,
+  checklistItem,
+  checklistText,
+  columnProgress,
+  connectNode,
+  deleteNode,
+  dropColumnRefs,
+  findNode,
+  nodeColumns,
+  nodeProgress,
+  progressText,
+  removeChecklistItem,
+  renameColumnRefs,
+  setColumnColor,
+  taskProgress,
+  updateChecklistItem,
+  updateNode,
+  type ChecklistItem,
+  type ProgressNode,
+} from "./progress.ts"
+import {
+  addFolder,
+  deleteFile,
+  deleteFolder,
+  dropTaskRefs,
+  filesText,
+  findFile,
+  findFolder,
+  folderName,
+  folderPath,
+  normalizeFiles,
+  tieFile,
+  updateFile,
+  updateFolder,
+  type FileEntry,
+  type Folder,
+} from "./files.ts"
+import { TEMPLATES } from "./latex.ts"
+import {
+  fileProject,
+  isTexSource,
+  projectFiles,
+  texProjects,
+} from "./files.ts"
+import {
+  DEFAULT_SCHEME,
+  findScheme,
+  isDefaultScheme,
+  schemeList,
+} from "./themes.ts"
+
 export const VERSION = "0.1.0-alpha.1"
 export type Task = {
   id: string
@@ -9,6 +63,8 @@ export type Task = {
   created: string
   completed?: string
   comments: string[]
+  /** Steps inside the ticket; ticking them moves its percentage. */
+  checklist?: ChecklistItem[]
 }
 export type Label = {
   id: string
@@ -72,6 +128,8 @@ export type WhiteboardObject = {
   fontSize?: number
   /** Ticket a link node points at. */
   taskId?: string
+  /** File a file node shows (see lib/files.ts). */
+  fileId?: string
   x: number
   y: number
   width: number
@@ -104,11 +162,16 @@ export function linkSymbol(ends: LineEnds) {
   return `${mark(ends.start, "<")}--${mark(ends.end, ">")}`.replace("---", "--")
 }
 /** A canvas item in a few words: what completion and listings show. */
-export function describeObject(o: WhiteboardObject, w: Pick<Workspace, "tasks">) {
+export function describeObject(
+  o: WhiteboardObject,
+  w: Pick<Workspace, "tasks" | "files">
+) {
   const text =
     o.kind === "link"
       ? (w.tasks.find((t) => t.id === o.taskId)?.title ?? "no ticket")
-      : o.text.replace(/\s+/g, " ").trim()
+      : o.kind === "file"
+        ? ((w.files ?? []).find((f) => f.id === o.fileId)?.name ?? "no file")
+        : o.text.replace(/\s+/g, " ").trim()
   return `${o.kind}${text ? `: ${text.slice(0, 48)}` : ""}`
 }
 /**
@@ -273,6 +336,7 @@ export type WhiteboardKind =
   | "document"
   | "text"
   | "link"
+  | "file"
 export const WHITEBOARD_KINDS: WhiteboardKind[] = [
   "sticky",
   "kanban",
@@ -280,6 +344,7 @@ export const WHITEBOARD_KINDS: WhiteboardKind[] = [
   "document",
   "text",
   "link",
+  "file",
 ]
 export type Connection = {
   objectId: string
@@ -448,11 +513,17 @@ export function renameColumn(
   if (name === from) return w
   if (w.columns.includes(name))
     throw new Error("A column with that name already exists.")
-  return {
-    ...w,
-    columns: w.columns.map((c) => (c === from ? name : c)),
-    tasks: w.tasks.map((t) => (t.column === from ? { ...t, column: name } : t)),
-  }
+  return renameColumnRefs(
+    {
+      ...w,
+      columns: w.columns.map((c) => (c === from ? name : c)),
+      tasks: w.tasks.map((t) =>
+        t.column === from ? { ...t, column: name } : t
+      ),
+    },
+    from,
+    name
+  )
 }
 export function addColumn(w: Workspace, raw: string): Workspace {
   const name = raw.trim()
@@ -511,8 +582,28 @@ export type FontChoice = {
 }
 /** Fills in fields added after a workspace was first saved, without touching user data. */
 export function normalizeWorkspace(saved: Workspace): Workspace {
+  const columns = new Set(saved.columns)
   return {
     ...saved,
+    ...normalizeFiles(saved),
+    columnColors: Object.fromEntries(
+      Object.entries(saved.columnColors ?? {}).filter(
+        ([column, color]) => columns.has(column) && isHexColor(color)
+      )
+    ),
+    nodes: Array.isArray(saved.nodes)
+      ? saved.nodes
+          .filter(
+            (n) =>
+              typeof n?.id === "string" &&
+              typeof n?.name === "string" &&
+              Array.isArray(n?.columns)
+          )
+          .map((n) => ({
+            ...n,
+            columns: n.columns.filter((c) => columns.has(c)),
+          }))
+      : [],
     objects: saved.objects ?? [],
     palette: Array.isArray(saved.palette)
       ? saved.palette.filter(isHexColor)
@@ -578,6 +669,13 @@ export type Workspace = Snapshot & {
   groups?: DrawingGroup[]
   /** ISO time of the last change; used to pick the newer copy when syncing. */
   updated?: string
+  /** Color of each column's completion bar, by column name. */
+  columnColors?: Record<string, string>
+  /** Nodes that combine the completion of several columns. */
+  nodes?: ProgressNode[]
+  /** The file explorer: folders, and the files imported into the workspace. */
+  folders?: Folder[]
+  files?: FileEntry[]
 }
 export const uid = () => crypto.randomUUID()
 export function initialWorkspace(): Workspace {
@@ -597,6 +695,10 @@ export function initialWorkspace(): Workspace {
     scanlines: false,
     palette: [...DEFAULT_PALETTE],
     penWidth: 3,
+    columnColors: {},
+    nodes: [],
+    folders: [],
+    files: [],
   }
 }
 export function snapshot(w: Workspace): Snapshot {
@@ -675,7 +777,9 @@ export function addWhiteboardObject(
           ? 420
           : kind === "text"
             ? 280
-            : 240,
+            : kind === "file"
+              ? 300
+              : 240,
     height:
       kind === "kanban"
         ? 420
@@ -687,7 +791,9 @@ export function addWhiteboardObject(
               ? 90
               : kind === "link"
                 ? 96
-                : 220,
+                : kind === "file"
+                  ? 260
+                  : 220,
   }
   if (kind === "sticky") item.color = STICKY_COLORS[0]
   if (kind === "text") item.fontSize = 18
@@ -703,7 +809,11 @@ export function deleteTask(w: Workspace, id: string): Workspace {
   const task = w.tasks.find((t) => t.id === id)
   if (!task) throw new Error("Task not found.")
   const saved = checkpoint(w, `Before deleting task: ${task.title}`)
-  return { ...saved, tasks: saved.tasks.filter((t) => t.id !== id) }
+  // Its folder stays, as an ordinary folder, with the files that were in it.
+  return dropTaskRefs(
+    { ...saved, tasks: saved.tasks.filter((t) => t.id !== id) },
+    id
+  )
 }
 
 export function deleteColumn(w: Workspace, name: string): Workspace {
@@ -712,13 +822,16 @@ export function deleteColumn(w: Workspace, name: string): Workspace {
     throw new Error("Keep at least one column. Create another column first.")
   const saved = checkpoint(w, `Before deleting column: ${name}`)
   const columns = saved.columns.filter((c) => c !== name)
-  return {
-    ...saved,
-    columns,
-    tasks: saved.tasks.map((t) =>
-      t.column === name ? { ...t, column: columns[0] } : t
-    ),
-  }
+  return dropColumnRefs(
+    {
+      ...saved,
+      columns,
+      tasks: saved.tasks.map((t) =>
+        t.column === name ? { ...t, column: columns[0] } : t
+      ),
+    },
+    name
+  )
 }
 
 export function updateTask(
@@ -813,25 +926,51 @@ export const HELP = `BOARD
   task rename <id> "New title"        Rename it
   task comment <id> "Text"            Add a comment
   task delete <id>                    Delete it (undo from history)
+  check list|add|done|undo|remove     Checklist inside a ticket:
+                                      check add <id> "Step" · check done <id> 2
   column list|new|rename|delete       column rename "Column" "New name"
+  column color "Column" #hex|reset    Color of the column's completion bar
+  progress                            Every column's bar with each ticket's share
+  node list|new|connect|disconnect    A node combines the completion of columns:
+       color|rename|delete            node new "Release" "Backlog" "Done"
+                                      node connect "Release" "In progress"
+                                      node color "Release" #hex|reset
   label list|new|add|color            label new "Name" global|local [#hex]
                                       label add <task-id> "Name" · label color "Name" #hex
 CANVAS
   wb add sticky|text|document|kanban|arrow "Optional text"
   wb add link <task-id>               Ticket node; click it to open the ticket
+  wb add file <file-id>               A file from the explorer, on the canvas
   wb list                             Every canvas item, arrow and drawing with its ID
   link <from> <to> [style] ["label"]  Connect two items. Style: directed (default),
                                       undirected, both, reverse  (or -> -- <-> <-)
   unlink <a> <b>                      Remove the connection between two items
   ends <arrow-id> <start> <end>       Line ends: none arrow dot diamond
   wb name <drawing-id> "Name"         Name a group of pen strokes
+FILES
+  files ["filter"]                    The explorer as text; a filter searches every folder
+  folder list|new|color|rename        folder new "Name" [#hex] ["Parent folder"]
+         ticket|delete                folder color "Name" #hex|reset
+                                      folder ticket "Name" <task-id>|none
+  file open <file-id>                 Open a file in Annotate
+  file tie|untie <file-id> <task-id>  Tie a file to a ticket
+  file move <file-id> "Folder"|/      Move it to a folder (/ is the top level)
+  file rename|delete <file-id>        file rename <file-id> "New name"
 VIEWS
-  cd <view>  (tab <view>)             terminal board canvas stats inbox history settings
+LATEX
+  tex templates                       The templates a document can start from
+  tex new "Name" [template]           New document (default template: article)
+  tex list                            Documents and their files
+  tex open <file-id or "Document">    Open one in the LaTeX editor
+VIEWS
+  cd <view>  (tab <view>)             terminal board canvas files annotate latex
+                                      stats inbox history settings
   vsplit [view]                       Split side by side; no view asks what to open
   hsplit [view]                       Split top and bottom
   close <view> · only                 Close a pane · keep only this one
                                       Views also answer to whiteboard, statistics,
-                                      incoming, customize, tasks, notes
+                                      incoming, customize, tasks, notes, explorer,
+                                      annotations
 HISTORY
   undo · redo                         Step back and forward (Ctrl+Z · Ctrl+Shift+Z)
   checkpoint "Description"            Save a restore point
@@ -841,7 +980,10 @@ HISTORY
   merge <proposal-id>                 Merge one (asks Y/N)
 SHELL
   stats                               Progress at a glance
-  theme original|phosphor|amber|violet
+  theme list                          Site themes: the schemes a terminal ships with
+  theme <name>                        campbell, campbell-powershell, solarized-dark,
+                                      one-half-dark, tango-dark, ubuntu … · default
+  theme phosphor|amber|violet         Accent color only
   shell auto|powershell|bash|zsh      Change how this terminal looks
   history · pwd · whoami · clear (cls) · exit · help
 KEYS
@@ -858,6 +1000,9 @@ export type View =
   | "terminal"
   | "board"
   | "canvas"
+  | "files"
+  | "annotate"
+  | "latex"
   | "stats"
   | "inbox"
   | "history"
@@ -866,6 +1011,9 @@ export const VIEWS: View[] = [
   "terminal",
   "board",
   "canvas",
+  "files",
+  "annotate",
+  "latex",
   "stats",
   "inbox",
   "history",
@@ -893,6 +1041,15 @@ const VIEW_ALIASES: Record<string, View> = {
   incoming: "inbox",
   customize: "settings",
   customise: "settings",
+  explorer: "files",
+  folders: "files",
+  file: "files",
+  annotations: "annotate",
+  annotation: "annotate",
+  annotator: "annotate",
+  tex: "latex",
+  documents: "latex",
+  pdf: "latex",
 }
 /** The view a word names, or undefined. */
 export function resolveView(word: string | undefined): View | undefined {
@@ -915,6 +1072,19 @@ export type CommandResult = {
   go?: View
   /** Task to open in a pane beside the current view. */
   ticket?: string
+  /** Site theme to switch this device to: a scheme id, or "default". */
+  scheme?: string
+  /** File to open in Annotate. */
+  file?: string
+  /** LaTeX: a document to make from a template, or one to open. */
+  latex?:
+    | { create: { name: string; template: string } }
+    | { open: { folder: string | undefined; file?: string } }
+}
+/** What a command may need to know about the device it runs on. */
+export type CommandContext = {
+  /** The site theme in use here, for `theme list`. */
+  scheme?: string
 }
 
 const shortId = (id: string) => id.slice(0, 8)
@@ -931,7 +1101,10 @@ function taskLine(w: Workspace, t: Task) {
     .filter(Boolean)
     .map((name) => ` #${name}`)
     .join("")
-  return `${shortId(t.id)}  [${t.done ? "x" : " "}] ${t.title}${labels}`
+  const steps = t.checklist?.length
+    ? `  (${t.checklist.filter((item) => item.done).length}/${t.checklist.length})`
+    : ""
+  return `${shortId(t.id)}  [${t.done ? "x" : " "}] ${t.title}${steps}${labels}`
 }
 /** The board as text: every column with its tasks. */
 export function boardText(w: Workspace) {
@@ -963,10 +1136,20 @@ export function ticketText(w: Workspace, t: Task) {
     ["Submission", t.submission],
     ["Labels", labels.length ? labels.join(", ") : "none"],
     ["Created", day(t.created)],
+    ["Progress", `${Math.round(taskProgress(t) * 100)}%`],
   ]
+  const list = t.checklist ?? []
   return [
     `${shortId(t.id)}  ${t.title}`,
     ...rows.map(([name, value]) => `  ${name.padEnd(11)}${value}`),
+    ...(list.length
+      ? [
+          `  ${"Checklist".padEnd(11)}${list.filter((item) => item.done).length}/${list.length}`,
+          ...list.map(
+            (item, i) => `    ${i + 1}. [${item.done ? "x" : " "}] ${item.text}`
+          ),
+        ]
+      : []),
     `  ${"Comments".padEnd(11)}${t.comments.length || "none"}`,
     ...t.comments.map((comment, i) => `    ${i + 1}. ${comment}`),
   ].join("\n")
@@ -985,14 +1168,19 @@ export function statsText(w: Workspace) {
     `${total} task${total === 1 ? "" : "s"} · ${done} done (${total ? Math.round((done / total) * 100) : 0}%) · ${waiting.length} awaiting submission`,
     ...w.columns.map((column) => {
       const count = w.tasks.filter((t) => t.column === column).length
-      return `  ${column.padEnd(width)}  [${"#".repeat(Math.round((count / most) * 20)).padEnd(20, ".")}] ${count}`
+      return `  ${column.padEnd(width)}  [${"#".repeat(Math.round((count / most) * 20)).padEnd(20, ".")}] ${count}  ·  ${columnProgress(w, column).percent}% complete`
+    }),
+    ...(w.nodes ?? []).map((node) => {
+      const p = nodeProgress(w, node)
+      return `  ${node.name}: ${bar(p.percent, 12)} ${p.percent}% of ${nodeColumns(w, node).join(" + ") || "no columns"}`
     }),
   ].join("\n")
 }
 export function execute(
   w: Workspace,
   input: string,
-  center?: { x: number; y: number }
+  center?: { x: number; y: number },
+  context: CommandContext = {}
 ): CommandResult {
   const tokens =
     input
@@ -1101,11 +1289,30 @@ export function execute(
       text: "text",
       link: "link",
       ticket: "link",
+      file: "file",
     }
     if (!Object.hasOwn(aliases, args[0]))
       throw new Error(
-        'Use wb add sticky|kanban|arrow|document|text "Optional text", or wb add link <task-id>.'
+        'Use wb add sticky|kanban|arrow|document|text "Optional text", wb add link <task-id> or wb add file <file-id>.'
       )
+    if (aliases[args[0]] === "file") {
+      const file = args[1] ? findFile(w, args[1]) : undefined
+      const added = addWhiteboardObject(w, "file", "", center)
+      return {
+        ...result(
+          {
+            ...added,
+            objects: added.objects.map((o, i) =>
+              i === added.objects.length - 1 ? { ...o, fileId: file?.id } : o
+            ),
+          },
+          file
+            ? `Placed "${file.name}" on the whiteboard.`
+            : "Added a file node. Pick its file on the node."
+        ),
+        view: "canvas",
+      }
+    }
     if (aliases[args[0]] === "link") {
       const task = args[1] ? resolve(w.tasks, args[1]) : undefined
       const added = addWhiteboardObject(w, "link", "", center)
@@ -1222,8 +1429,276 @@ export function execute(
         .map((l) => `${l.name.padEnd(20)} ${l.scope.padEnd(7)} ${l.color}`)
         .join("\n") || 'No labels yet. Try label new "Name" global.'
     )
-  if (verb === "theme" && THEMES[sub])
-    return result({ ...w, theme: sub, accent: THEMES[sub] }, `Theme: ${sub}.`)
+  if (verb === "theme") {
+    const current = context.scheme ?? DEFAULT_SCHEME
+    if (!sub || sub === "list")
+      return result(
+        w,
+        `${schemeList(current)}\nSwitch with theme <name>. Accent only: theme phosphor|amber|violet.`
+      )
+    const name = [sub, ...args].join(" ")
+    // The site's own look: no scheme, and the accent it came with.
+    if (isDefaultScheme(name))
+      return {
+        ...result(
+          { ...w, theme: "original", accent: THEMES.original },
+          "Theme: default."
+        ),
+        scheme: DEFAULT_SCHEME,
+      }
+    if (Object.hasOwn(THEMES, sub) && args.length === 0)
+      return result(
+        { ...w, theme: sub, accent: THEMES[sub] },
+        `Accent: ${sub}.`
+      )
+    const scheme = findScheme(name)
+    if (!scheme)
+      throw new Error("Unknown theme. `theme list` shows them all.")
+    return { ...result(w, `Theme: ${scheme.name}.`), scheme: scheme.id }
+  }
+  if (verb === "progress") return result(w, progressText(w))
+  if (verb === "check") {
+    if (!["list", "add", "done", "undo", "remove"].includes(sub ?? ""))
+      throw new Error(
+        'Use check list|add|done|undo|remove <task-id>, then "text" to add or an item number.'
+      )
+    const task = resolve(w.tasks, args[0])
+    if (sub === "list") return result(w, checklistText(task))
+    const after = (next: Workspace) =>
+      result(next, checklistText(next.tasks.find((t) => t.id === task.id)!))
+    if (sub === "add")
+      return after(addChecklistItem(w, task.id, args.slice(1).join(" ")))
+    const target = checklistItem(task, args[1])
+    return after(
+      sub === "remove"
+        ? removeChecklistItem(w, task.id, target.id)
+        : updateChecklistItem(w, task.id, target.id, { done: sub === "done" })
+    )
+  }
+  if (verb === "column" && sub === "color") {
+    const color = args.at(-1) ?? ""
+    const name = args.slice(0, -1).join(" ")
+    if (!name) throw new Error('Use column color "Column" #hex, or reset.')
+    const reset = color.toLowerCase() === "reset"
+    return result(
+      setColumnColor(w, name, reset ? undefined : color),
+      reset
+        ? `${name}: bar color reset.`
+        : `${name}: bar color ${color.toLowerCase()}.`
+    )
+  }
+  if (verb === "node") {
+    const nodes = w.nodes ?? []
+    if (!sub || sub === "list")
+      return result(
+        w,
+        nodes
+          .map((node) => {
+            const p = nodeProgress(w, node)
+            return `${shortId(node.id)}  ${node.name}  ${bar(p.percent)} ${p.percent}%  ${p.done}/${p.total} done  ← ${nodeColumns(w, node).join(" + ") || "no columns"}`
+          })
+          .join("\n") ||
+          'No nodes yet. Try node new "Release" "Backlog" "Done".'
+      )
+    if (sub === "new") {
+      const next = addNode(w, args[0] ?? "", args.slice(1))
+      const node = next.nodes!.at(-1)!
+      return result(
+        next,
+        `Node "${node.name}" combines ${node.columns.join(" + ") || "no columns yet. Connect some: node connect"}.`
+      )
+    }
+    if (
+      !["connect", "disconnect", "color", "rename", "delete"].includes(sub)
+    )
+      throw new Error(
+        "Use node list|new|connect|disconnect|color|rename|delete."
+      )
+    const node = findNode(w, args[0])
+    if (sub === "delete")
+      return result(deleteNode(w, node.id), `Node "${node.name}" deleted.`)
+    if (sub === "rename")
+      return result(
+        updateNode(w, node.id, { name: args.slice(1).join(" ") }),
+        "Node renamed."
+      )
+    if (sub === "color") {
+      const reset = (args[1] ?? "").toLowerCase() === "reset"
+      return result(
+        updateNode(w, node.id, { color: reset ? undefined : (args[1] ?? "") }),
+        reset ? "Node color reset." : "Node recolored."
+      )
+    }
+    if (args.length < 2)
+      throw new Error(`Use node ${sub} "${node.name}" "Column".`)
+    const next = args
+      .slice(1)
+      .reduce(
+        (current, column) =>
+          connectNode(current, node.id, column, sub === "connect"),
+        w
+      )
+    const now = next.nodes!.find((n) => n.id === node.id)!
+    const p = nodeProgress(next, now)
+    return result(
+      next,
+      `${now.name}: ${nodeColumns(next, now).join(" + ") || "no columns"} · ${p.percent}%`
+    )
+  }
+  if (verb === "files" || (verb === "file" && (!sub || sub === "list")))
+    return result(
+      w,
+      filesText(w, verb === "files" ? [sub, ...args].filter(Boolean).join(" ") : "")
+    )
+  if (verb === "folder") {
+    const folders = w.folders ?? []
+    if (!sub || sub === "list")
+      return result(
+        w,
+        folders
+          .map((f) => {
+            const count = (w.files ?? []).filter((x) => x.folder === f.id).length
+            return `${shortId(f.id)}  ${folderPath(w, f.id)}/  ${count} file${count === 1 ? "" : "s"}${f.taskId ? "  ticket" : ""}${f.color ? `  ${f.color}` : ""}`
+          })
+          .join("\n") || 'No folders yet. Try folder new "Name".'
+      )
+    if (sub === "new") {
+      const rest = args.slice(1)
+      const color = rest.find((arg) => isHexColor(arg))
+      const parent = rest.find((arg) => !isHexColor(arg))
+      const added = addFolder(w, args[0] ?? "", {
+        color,
+        parent: parent ? findFolder(w, parent).id : undefined,
+      })
+      return result(
+        added.workspace,
+        `Folder "${folderPath(added.workspace, added.id)}" created.`
+      )
+    }
+    if (!["color", "rename", "ticket", "delete"].includes(sub))
+      throw new Error("Use folder list|new|color|rename|ticket|delete.")
+    const folder = findFolder(w, args[0])
+    const name = folderName(w, folder)
+    if (sub === "delete")
+      return result(
+        deleteFolder(w, folder.id),
+        `Folder "${name}" deleted. What was in it moved up a level.`
+      )
+    if (sub === "rename")
+      return result(
+        updateFolder(w, folder.id, { name: args.slice(1).join(" ") }),
+        "Folder renamed."
+      )
+    if (sub === "color") {
+      const reset = (args[1] ?? "").toLowerCase() === "reset"
+      return result(
+        updateFolder(w, folder.id, {
+          color: reset ? undefined : (args[1] ?? ""),
+        }),
+        reset ? `${name}: color reset.` : `${name}: ${(args[1] ?? "").toLowerCase()}.`
+      )
+    }
+    const none = /^(none|off|-)$/i.test(args[1] ?? "")
+    const task = none ? undefined : resolve(w.tasks, args[1])
+    return result(
+      updateFolder(w, folder.id, { taskId: task?.id }),
+      task
+        ? `"${name}" is now the folder of "${task.title}".`
+        : `"${name}" no longer belongs to a ticket.`
+    )
+  }
+  if (verb === "tex" || verb === "latex") {
+    if (sub === "templates")
+      return result(
+        w,
+        TEMPLATES.map(
+          (t) => `${t.id.padEnd(16)} ${t.name.padEnd(22)} ${t.description}`
+        ).join("\n")
+      )
+    if (!sub || sub === "list") {
+      const lines = texProjects(w).flatMap((project) => [
+        `${project.folder ? shortId(project.folder) : "--------"}  ${project.name}/`,
+        ...projectFiles(w, project.folder)
+          .filter(({ file }) => isTexSource(file.name))
+          .map(({ file, path }) => `  ${shortId(file.id)}  ${path}`),
+      ])
+      return result(
+        w,
+        lines.join("\n") ||
+          'No LaTeX documents yet. Try tex new "Resume" resume-classic (tex templates lists them).'
+      )
+    }
+    if (sub === "new") {
+      const name = (args[0] ?? "").trim()
+      if (!name) throw new Error('Use tex new "Name" [template].')
+      const template = TEMPLATES.find(
+        (t) => t.id === (args[1] ?? "article").toLowerCase()
+      )
+      if (!template)
+        throw new Error(
+          `No template called ${args[1]}. \`tex templates\` lists them.`
+        )
+      return {
+        ...result(w, `Making "${name}" from the ${template.name} template…`),
+        latex: { create: { name, template: template.id } },
+      }
+    }
+    if (sub === "open") {
+      const ref = args.join(" ").trim()
+      const project = texProjects(w).find(
+        (p) =>
+          p.name.toLowerCase() === ref.toLowerCase() ||
+          (p.folder && ref && p.folder.startsWith(ref))
+      )
+      if (project)
+        return {
+          ...result(w, `Opened "${project.name}".`),
+          latex: { open: { folder: project.folder } },
+        }
+      const file = findFile(w, ref)
+      if (!isTexSource(file.name))
+        throw new Error(`${file.name} is not a text file LaTeX reads.`)
+      return {
+        ...result(w, `Opened ${file.name}.`),
+        latex: { open: { folder: fileProject(w, file.id), file: file.id } },
+      }
+    }
+    throw new Error("Use tex templates|new|list|open.")
+  }
+  if (verb === "file") {
+    if (!["open", "tie", "untie", "move", "rename", "delete"].includes(sub))
+      throw new Error("Use file open|tie|untie|move|rename|delete <file-id>.")
+    const file = findFile(w, args[0])
+    if (sub === "open")
+      return {
+        ...result(w, `Opened "${file.name}" in Annotate.`),
+        file: file.id,
+      }
+    if (sub === "delete")
+      return result(deleteFile(w, file.id), `"${file.name}" deleted. undo brings it back.`)
+    if (sub === "rename")
+      return result(
+        updateFile(w, file.id, { name: args.slice(1).join(" ") }),
+        "File renamed."
+      )
+    if (sub === "move") {
+      const top = !args[1] || /^(\/|\\|~|\.\.)$/.test(args[1])
+      const folder = top ? undefined : findFolder(w, args[1])
+      return result(
+        updateFile(w, file.id, { folder: folder?.id }),
+        folder
+          ? `Moved to ${folderPath(w, folder.id)}.`
+          : "Moved to the top level."
+      )
+    }
+    const task = resolve(w.tasks, args[1])
+    return result(
+      tieFile(w, file.id, task.id, sub === "tie"),
+      sub === "tie"
+        ? `"${file.name}" is tied to "${task.title}".`
+        : `"${file.name}" is no longer tied to "${task.title}".`
+    )
+  }
   if (verb === "checkpoint" && sub)
     return result(checkpoint(w, [sub, ...args].join(" ")), "Checkpoint saved.")
   if (verb === "revert" || verb === "merge") {

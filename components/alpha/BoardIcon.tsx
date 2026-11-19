@@ -8,6 +8,7 @@ const paths = {
   arrow: "M4 19 20 5M10 5h10v10",
   document: "M5 3h9l5 5v13H5zM14 3v6h5M8 13h8M8 17h8",
   text: "M5 7V4h14v3M12 4v16M9 20h6",
+  file: "M6 3h8l5 5v13H6zM14 3v5h5M9 17l3-4 2 2 2-3",
   link: "M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1",
   undo: "M9 4 3 10l6 6M3 10h11a6 6 0 0 1 6 6v4",
   lock: "M7 10V7a5 5 0 0 1 10 0v3M5 10h14v11H5zM12 14v3",

@@ -3,6 +3,7 @@ import { Geist, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
 import { cn } from "@/lib/utils"
 import AppProviders from "@/components/AppProviders"
+import { SCHEME_SCRIPT } from "@/lib/themes"
 
 const fontSans = Geist({
   subsets: ["latin"],
@@ -31,6 +32,8 @@ export default function RootLayout({
       )}
     >
       <body>
+        {/* Applies the saved site theme before the first paint. */}
+        <script dangerouslySetInnerHTML={{ __html: SCHEME_SCRIPT }} />
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

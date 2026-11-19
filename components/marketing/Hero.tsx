@@ -86,7 +86,7 @@ function Hero() {
       <div data-fractal-window className="relative isolate h-screen overflow-hidden text-white flex items-center justify-center">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.6),rgba(0,0,0,0)_70%)]"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,color-mix(in_srgb,var(--scheme-hero-low,#000)_60%,transparent),transparent_70%)]"
         />
         <FractalControls />
         <div className="relative z-10 flex items-center flex-col ">

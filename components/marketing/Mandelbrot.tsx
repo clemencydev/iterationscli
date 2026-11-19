@@ -148,6 +148,10 @@ uniform float baseAspect;
 uniform float overlayAspect;
 uniform float overlayOn;
 uniform float fade;
+// The picture runs from low (its darkest) to high (its brightest):
+// black to white unless a site theme sets its own two colors.
+uniform vec3 low;
+uniform vec3 high;
 out vec4 outColor;
 void main() {
   vec2 q = (gl_FragCoord.xy - .5 * resolution) / resolution.y;
@@ -160,7 +164,7 @@ void main() {
   color = mix(color, sharp, overlayOn * smoothstep(0., .08, edge));
   color *= fade * (1. - .3 * smoothstep(.35, 1.3, length(q)));
   float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-  outColor = vec4(color + (noise - .5) / 255., 1.);
+  outColor = vec4(low + (color + (noise - .5) / 255.) * (high - low), 1.);
 }`
 
 type Keyframe = {
@@ -191,6 +195,20 @@ function remember(id: string) {
   } catch {
     // Private mode: the next reload may repeat a preset, nothing else breaks.
   }
+}
+
+/**
+ * The two colors the picture runs between: the site theme's when one is
+ * active (lib/themes.ts sets them on the page), otherwise black and white.
+ */
+function tint(name: string, fallback: number): [number, number, number] {
+  const value = document.documentElement.style.getPropertyValue(name).trim()
+  if (!/^#[\da-f]{6}$/i.test(value)) return [fallback, fallback, fallback]
+  return [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16) / 255) as [
+    number,
+    number,
+    number,
+  ]
 }
 
 /** `?fractal=<preset id>&at=<octave>` opens a chosen zoom at a chosen depth. */
@@ -497,9 +515,10 @@ function createRenderer(canvas: HTMLCanvasElement, reducedMotion: boolean) {
     const first = Math.min(Math.floor(position), preset.depth)
     const base = frames.get(first)
     const overlay = frames.get(first + 1)
+    const low = tint("--scheme-hero-low", 0)
     gl!.viewport(0, 0, canvas.width, canvas.height)
     if (!base) {
-      gl!.clearColor(0, 0, 0, 1)
+      gl!.clearColor(low[0], low[1], low[2], 1)
       gl!.clear(gl!.COLOR_BUFFER_BIT)
       return
     }
@@ -521,6 +540,8 @@ function createRenderer(canvas: HTMLCanvasElement, reducedMotion: boolean) {
     )
     gl!.uniform1f(uniforms.overlayOn, overlay ? 1 : 0)
     gl!.uniform1f(uniforms.fade, fade * fade * (3 - 2 * fade))
+    gl!.uniform3fv(uniforms.low, low)
+    gl!.uniform3fv(uniforms.high, tint("--scheme-hero-high", 1))
     gl!.drawArrays(gl!.TRIANGLES, 0, 6)
   }
 
@@ -710,7 +731,7 @@ export default function Mandelbrot() {
       key={generation}
       ref={canvas}
       aria-hidden="true"
-      className="pointer-events-none fixed inset-0 -z-10 h-full w-full bg-black"
+      className="pointer-events-none fixed inset-0 -z-10 h-full w-full bg-[var(--scheme-hero-low,#000)]"
     />
   )
 }

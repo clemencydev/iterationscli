@@ -1,0 +1,560 @@
+/* The Annotate view. Lives inside the workspace shell and uses its tokens
+   (--alpha-accent, --line, --dim, --surface, --hover) plus the site theme's. */
+.annotator,
+.chooser {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.annotator {
+  display: flex;
+  flex-direction: column;
+}
+.chooser {
+  padding: 30px 28px 40px;
+  overflow: auto;
+}
+.dropping {
+  outline: 2px dashed var(--alpha-accent);
+  outline-offset: -8px;
+}
+.eyebrow {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  margin-bottom: 6px !important;
+}
+.muted {
+  color: var(--dim);
+  max-width: 70ch;
+}
+.chooserBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+.chooserBar > input {
+  flex: 1;
+  min-width: 180px;
+}
+.importButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--alpha-accent);
+  color: var(--background);
+  font-weight: 600;
+  cursor: pointer;
+}
+.importButton:focus-within {
+  outline: 2px solid var(--alpha-accent);
+  outline-offset: 2px;
+}
+.importButton input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.chooser .card {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  text-align: left;
+  background: var(--card);
+}
+.card strong {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cardThumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  margin-bottom: 4px;
+}
+.empty {
+  text-align: center;
+  padding: 48px 20px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+.empty span {
+  display: block;
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+/* ---- Editor ---- */
+.head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.name {
+  display: grid;
+  flex: 1;
+  min-width: 140px;
+}
+.name strong {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.head select {
+  max-width: 190px;
+}
+.unsaved {
+  color: var(--alpha-accent);
+  font-size: 11px;
+}
+.annotator .save {
+  background: var(--alpha-accent);
+  border-color: transparent;
+  color: var(--background);
+  font-weight: 600;
+}
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.work {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.side {
+  width: 300px;
+  flex-shrink: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+}
+@container (max-width: 760px) {
+  .body {
+    flex-direction: column;
+    overflow: auto;
+  }
+  .work {
+    flex: none;
+    height: 62vh;
+    min-height: 360px;
+  }
+  .side {
+    width: auto;
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+.section {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.annotator .section h2,
+.annotator .list h2 {
+  margin: 0;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.row > :is(input, select) {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.check,
+.inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--dim);
+  cursor: pointer;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 11px;
+}
+.annotator .chip button {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.annotator .chip button:hover {
+  background: none;
+  color: var(--alpha-accent);
+}
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.item p {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.annotator .item textarea {
+  flex: 1;
+  min-height: 54px;
+  margin: 0;
+}
+.pinNumber {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #f59e0b;
+  color: #000000;
+  font-size: 11px;
+  font-weight: 700;
+}
+.annotator .remove {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex-shrink: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dim);
+}
+.annotator .remove:hover {
+  color: var(--destructive);
+}
+
+/* ---- Stage ---- */
+.tools,
+.transport {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.annotator .tools button,
+.annotator .transport button {
+  padding: 4px 9px;
+}
+.gap {
+  width: 10px;
+}
+.annotator .swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+}
+.annotator .swatch[aria-pressed="true"] {
+  outline: 2px solid var(--alpha-accent);
+  outline-offset: 2px;
+}
+.annotator .tools input[type="color"] {
+  width: 26px;
+  height: 24px;
+}
+.annotator .tools select {
+  padding: 3px 6px;
+}
+.stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+  background:
+    repeating-conic-gradient(
+        color-mix(in srgb, var(--foreground) 5%, transparent) 0 25%,
+        transparent 0 50%
+      )
+      0 0 / 20px 20px,
+    var(--surface);
+}
+.frame {
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: 0 2px 18px #00000040;
+  touch-action: none;
+  user-select: none;
+  cursor: crosshair;
+}
+.frame[data-tool="erase"] {
+  cursor: default;
+}
+.frame[data-tool="text"] {
+  cursor: text;
+}
+.frame > :is(img, video) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.frame > video {
+  cursor: pointer;
+  background: #000000;
+}
+.layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.annotator .typing {
+  position: absolute;
+  min-width: 140px;
+  padding: 2px 6px;
+  border: 1px dashed var(--alpha-accent);
+  background: #000000aa;
+  font-weight: 600;
+}
+.placeholder {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  flex: 1;
+  padding: 24px;
+  text-align: center;
+}
+.placeholder b {
+  font-size: 44px;
+  font-weight: 400;
+  color: var(--dim);
+}
+.placeholder span {
+  color: var(--dim);
+  font-size: 11px;
+  max-width: 52ch;
+}
+.document {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+.text {
+  flex: 1;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  font: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Video and audio ---- */
+.media {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+.media > .stage {
+  min-height: 180px;
+}
+.transport {
+  border-top: 1px solid var(--line);
+  gap: 6px;
+}
+.transport code {
+  margin: 0 6px;
+  font-size: 12px;
+}
+.caption {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  max-width: 90%;
+  padding: 2px 8px;
+  background: #000000aa;
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+  cursor: move;
+  touch-action: none;
+}
+.caption[data-selected] {
+  outline: 1px dashed #ffffff;
+}
+.audio {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  width: 100%;
+  max-width: 820px;
+  text-align: center;
+}
+.audio p {
+  color: var(--dim);
+  font-size: 11px;
+}
+.waveform {
+  --played: var(--alpha-accent);
+  --unplayed: color-mix(in srgb, var(--foreground) 35%, transparent);
+  width: 100%;
+  height: 140px;
+}
+.note {
+  font-size: 56px;
+  color: var(--dim);
+}
+.timeline {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  margin: 10px 12px 4px;
+  padding: 6px 0;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.timeline i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.lane {
+  position: relative;
+  height: 26px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.lane[data-thin] {
+  height: 10px;
+}
+.clip {
+  background: color-mix(in srgb, var(--alpha-accent) 38%, transparent);
+  border-right: 2px solid var(--background);
+}
+.clip[data-odd] {
+  background: color-mix(in srgb, var(--alpha-accent) 24%, transparent);
+}
+.cut {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--destructive) 55%, transparent) 0 4px,
+    transparent 4px 8px
+  );
+}
+.textBar {
+  background: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+.textBar[data-selected] {
+  background: var(--alpha-accent);
+}
+.selection {
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  pointer-events: none;
+}
+.bound {
+  width: 2px;
+  background: var(--foreground);
+  pointer-events: none;
+}
+.mark {
+  top: -2px !important;
+  bottom: auto !important;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+.playhead {
+  width: 2px;
+  margin-left: -1px;
+  background: var(--destructive);
+  pointer-events: none;
+}
+.summary {
+  padding: 0 12px;
+  color: var(--dim);
+  font-size: 11px;
+}
+.lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 20px;
+  padding: 10px 12px 16px;
+}
+.list {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  margin-top: 6px;
+}
+.edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.edit[data-selected] {
+  outline: 1px solid var(--alpha-accent);
+  outline-offset: 2px;
+}
+.annotator .kind {
+  min-width: 52px;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+.kind[data-kind="cut"] {
+  color: var(--destructive);
+}
+.annotator .time {
+  width: 68px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+.annotator .grow {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px;
+}

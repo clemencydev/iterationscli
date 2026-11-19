@@ -1,0 +1,471 @@
+/* The LaTeX view. Lives inside the workspace shell and uses its tokens
+   (--alpha-accent, --line, --dim, --surface, --hover) plus the site theme's.
+   The editor and the preview bring their own styles. */
+.latex,
+.gallery {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.latex {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Choosing or starting a document ---- */
+.gallery {
+  padding: 30px 28px 40px;
+  overflow: auto;
+}
+.eyebrow {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  margin-bottom: 6px !important;
+}
+.muted {
+  color: var(--dim);
+  max-width: 76ch;
+}
+.gallery h2 {
+  margin: 26px 0 10px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.gallery .card {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 14px;
+  text-align: left;
+  background: var(--card);
+}
+.card strong {
+  font-weight: 500;
+}
+.card span {
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.upload {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--secondary);
+  cursor: pointer;
+}
+.upload:focus-within {
+  outline: 2px solid var(--alpha-accent);
+  outline-offset: 2px;
+}
+.upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.hint {
+  margin-top: 8px !important;
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.hint code {
+  font-size: 10px;
+}
+
+/* ---- A document ---- */
+.head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.name {
+  display: grid;
+  min-width: 120px;
+  max-width: 280px;
+}
+.name :is(strong, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name strong {
+  font-weight: 500;
+}
+.status {
+  flex: 1;
+  min-width: 80px;
+  color: var(--dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status[data-status="failed"] {
+  color: var(--destructive);
+}
+.status[data-status="running"]::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--alpha-accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status[data-status="running"]::before {
+    animation: none;
+  }
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.latex .primary,
+.placeholder .primary {
+  background: var(--alpha-accent);
+  border-color: transparent;
+  color: var(--background);
+  font-weight: 600;
+}
+.switch {
+  display: inline-flex;
+}
+.latex .switch button {
+  padding: 4px 10px;
+}
+.latex :is(.switch, .tabs) button[aria-selected="true"] {
+  border-color: var(--alpha-accent);
+  color: var(--alpha-accent);
+}
+.notice {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+  font-size: 11px;
+}
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.rail {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+.rail[data-open] {
+  width: 250px;
+}
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+.rail:not([data-open]) .tabs {
+  flex-direction: column;
+  border-bottom: 0;
+}
+.latex .tabs button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 11px;
+}
+.rail:not([data-open]) .tabs button {
+  padding: 10px 6px;
+  writing-mode: vertical-rl;
+  border-bottom: 0;
+}
+.latex .tabs button[aria-selected="true"] {
+  border-bottom-color: var(--alpha-accent);
+}
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
+}
+.panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.row {
+  display: flex;
+  gap: 6px;
+}
+.row input {
+  flex: 1;
+  min-width: 0;
+}
+.files li {
+  display: flex;
+  align-items: center;
+}
+.files li[data-active] {
+  background: var(--hover);
+  box-shadow: inset 2px 0 0 var(--alpha-accent);
+}
+.latex .fileName {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.fileName span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fileName small {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.latex .remove {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  flex-shrink: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dim);
+}
+.latex .remove:hover {
+  color: var(--destructive);
+}
+.latex .outline button {
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outline button[data-active] {
+  color: var(--alpha-accent);
+  box-shadow: inset 2px 0 0 var(--alpha-accent);
+}
+.packages li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.packages div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.packages code {
+  font-size: 12px;
+}
+.packages p {
+  grid-column: 1;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.latex .packages button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.caption {
+  margin: 10px 0 4px !important;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 1.2px;
+}
+.latex .font {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  text-align: left;
+}
+.font strong {
+  font-weight: 500;
+}
+.font span {
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.half {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.source,
+.preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.source > :first-child {
+  flex: 1;
+  min-height: 0;
+}
+.preview > * {
+  flex: 1;
+  min-height: 0;
+}
+.placeholder {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.placeholder span {
+  max-width: 46ch;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.problems {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  max-height: 40%;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.problemsHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.problemsHead strong {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 500;
+}
+.latex .problemsHead button:not(.remove) {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.problems ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+.latex .problems li button {
+  display: grid;
+  grid-template-columns: 58px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+}
+.problems b {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+}
+.problems li[data-severity="error"] b {
+  color: var(--destructive);
+}
+.problems li[data-severity="warning"] b {
+  color: #d9a441;
+}
+.problems em {
+  display: block;
+  color: var(--dim);
+  font-size: 11px;
+  font-style: normal;
+}
+.problems li.hint {
+  padding: 8px 12px;
+}
+.log {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font: inherit;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 10px;
+}
+.latex .foot button {
+  padding: 1px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 10px;
+}
+.latex .foot button[data-errors] {
+  color: var(--destructive);
+}

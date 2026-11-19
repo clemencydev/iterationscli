@@ -91,6 +91,42 @@ import {
 } from "@/lib/panes"
 import { useAuthenticate } from "@/hooks/use-authenticate"
 import {
+  addChecklistItem,
+  addNode,
+  columnProgress,
+  connectNode,
+  deleteNode,
+  nodeColumns,
+  nodeProgress,
+  removeChecklistItem,
+  setColumnColor,
+  taskProgress,
+  updateChecklistItem,
+  updateNode,
+} from "@/lib/progress"
+import {
+  addFile,
+  ensureTicketFolder,
+  fileProject,
+  folderName,
+  folderPath,
+  isTexSource,
+  projectFiles,
+  texProjects,
+  ticketFiles,
+  usedBlobs,
+} from "@/lib/files"
+import { keepStorage, mediaSize, pruneBlobs, putBlob } from "@/lib/file-store"
+import type { Annotation } from "@/lib/annotations"
+import { DEFAULT_SCHEME, SCHEMES } from "@/lib/themes"
+import { useSiteScheme } from "@/lib/theme-client"
+import Annotator from "./Annotator"
+import LatexEditor, { type LatexOpen } from "./LatexEditor"
+import { createLatexProject } from "@/lib/latex-project"
+import { TEMPLATES } from "@/lib/latex"
+import FileExplorer, { type Place } from "./FileExplorer"
+import { FileThumb } from "./Shapes"
+import {
   banner,
   builtin,
   confirmPrompt,
@@ -108,6 +144,9 @@ const names: Record<View, string> = {
   terminal: "Terminal",
   board: "Task board",
   canvas: "Canvas",
+  files: "Files",
+  annotate: "Annotate",
+  latex: "LaTeX",
   stats: "Statistics",
   inbox: "Incoming",
   history: "History",
@@ -117,6 +156,9 @@ const icons: Record<View, string> = {
   terminal: ">_",
   board: "▤",
   canvas: "✳",
+  files: "❏",
+  annotate: "✎",
+  latex: "∑",
   stats: "▥",
   inbox: "↓",
   history: "↶",
@@ -143,7 +185,23 @@ const labelStyle = (label: Label) =>
 export default function Workspace() {
   const { resolvedTheme, setTheme } = useTheme()
   const [w, setW] = useState<WorkspaceData>(initialWorkspace)
+  // The workspace as of the last change, for work that finishes later (an
+  // import, a save) and must build on what is there by then.
+  const live = useRef(w)
+  useEffect(() => {
+    live.current = w
+  })
   const [ready, setReady] = useState(false)
+  // The site theme: a terminal color scheme for the whole website.
+  const [scheme, chooseScheme] = useSiteScheme()
+  /** The file open in Annotate, and unsaved annotations by file. */
+  const [annotating, setAnnotating] = useState<string | null>(null)
+  const [drafts, setDrafts] = useState<Record<string, Annotation>>({})
+  /** The folder the file explorer is showing. */
+  const [filePlace, setFilePlace] = useState<Place>({ type: "all" })
+  const [renamingNode, setRenamingNode] = useState<string | null>(null)
+  /** The LaTeX document open in the editor, and the file of it being shown. */
+  const [latexOpen, setLatexOpen] = useState<LatexOpen>(null)
   const [storageError, setStorageError] = useState("")
   // Undo and redo: workspaces as they were before and after each change.
   const past = useRef<WorkspaceData[]>([])
@@ -313,6 +371,18 @@ export default function Workspace() {
   // Mirrors the workspace to the signed-in account when Supabase is configured;
   // otherwise this stays "local" and browser storage is the only copy.
   const sync = useWorkspaceSync(w, ready, setW)
+  // Shortly after opening, drop stored file contents nothing refers to any
+  // more. Only then: during a session a deleted file can still be undone.
+  useEffect(() => {
+    if (!ready) return
+    const timer = setTimeout(() => {
+      const keep = usedBlobs(live.current)
+      for (const earlier of [...past.current, ...future.current])
+        for (const key of usedBlobs(earlier)) keep.add(key)
+      void pruneBlobs(keep).catch(() => {})
+    }, 8000)
+    return () => clearTimeout(timer)
+  }, [ready])
   useEffect(() => {
     if (!ready) return
     try {
@@ -426,10 +496,12 @@ export default function Workspace() {
   const commit = (next: WorkspaceData) => {
     const now = Date.now()
     if (now - lastChange.current > 600 || !past.current.length)
-      past.current = [...past.current, w].slice(-100)
+      past.current = [...past.current, live.current].slice(-100)
     lastChange.current = now
     future.current = []
-    setW(stamp(next))
+    const stamped = stamp(next)
+    live.current = stamped
+    setW(stamped)
   }
   /** Steps back (undo) or forward (redo). Returns false at either end. */
   const travel = (direction: "undo" | "redo") => {
@@ -450,8 +522,9 @@ export default function Workspace() {
     message?: string
   ) => {
     try {
-      const next = fn(w)
-      if (next !== w) commit(next)
+      const current = live.current
+      const next = fn(current)
+      if (next !== current) commit(next)
       if (message) setNotice(message)
       return true
     } catch (error) {
@@ -555,6 +628,129 @@ export default function Workspace() {
     setNotice(done ? "Redone." : "Nothing to redo.")
     return done
   }
+  /**
+   * Applies a change that is bookkeeping rather than something to undo: it
+   * does not become an undo step (a file's size after its text was saved).
+   */
+  const amend = (fn: (current: WorkspaceData) => WorkspaceData) => {
+    const current = live.current
+    const next = fn(current)
+    if (next === current) return
+    const stamped = stamp(next)
+    live.current = stamped
+    setW(stamped)
+  }
+  /** Opens a document, or one file of it, in the LaTeX editor. */
+  const openLatex = (target: LatexOpen) => {
+    setLatexOpen(target)
+    if (target) {
+      setSelected(null)
+      open("latex")
+    }
+  }
+  /**
+   * Opens a file where it is worked on: LaTeX and other text TeX reads in the
+   * LaTeX editor, everything else in Annotate. Null goes back to choosing.
+   */
+  const annotate = (id: string | null) => {
+    const file = id ? (live.current.files ?? []).find((f) => f.id === id) : null
+    if (file && isTexSource(file.name))
+      return openLatex({
+        folder: fileProject(live.current, file.id),
+        file: file.id,
+      })
+    setAnnotating(id)
+    if (id) {
+      setSelected(null)
+      open("annotate")
+    }
+  }
+  /**
+   * Imports files: their bytes go to this device's file store, their
+   * descriptions into the workspace (a folder, or a ticket's own folder).
+   */
+  async function importFiles(
+    picked: File[],
+    where: { folder?: string; taskId?: string } = {}
+  ) {
+    const stored: {
+      file: File
+      blob: string
+      size: { width: number; height: number } | null
+    }[] = []
+    let failed = ""
+    for (const file of picked) {
+      try {
+        const blob = await putBlob(file)
+        stored.push({ file, blob, size: await mediaSize(file) })
+      } catch (error) {
+        failed = error instanceof Error ? error.message : "Import failed."
+        break
+      }
+    }
+    if (!stored.length) {
+      setNotice(failed || "Nothing was imported.")
+      return []
+    }
+    keepStorage()
+    const ids: string[] = []
+    change(
+      (current) => {
+        let next = current
+        let folder = where.folder
+        if (!folder && where.taskId) {
+          const made = ensureTicketFolder(next, where.taskId)
+          next = made.workspace
+          folder = made.id
+        }
+        if (folder && !(next.folders ?? []).some((f) => f.id === folder))
+          folder = undefined
+        for (const item of stored) {
+          const added = addFile(next, {
+            name: item.file.name,
+            mime: item.file.type || "application/octet-stream",
+            size: item.file.size,
+            blob: item.blob,
+            folder,
+            ...(item.size ?? {}),
+          })
+          next = added.workspace
+          ids.push(added.id)
+        }
+        return next
+      },
+      failed
+        ? `Imported ${stored.length} of ${picked.length}. ${failed}`
+        : `Imported ${stored.length} file${stored.length === 1 ? "" : "s"}.`
+    )
+    return ids
+  }
+  /** Puts a file on the canvas, sized to the picture when it is one. */
+  const placeOnCanvas = (fileId: string) =>
+    change((current) => {
+      const file = (current.files ?? []).find((f) => f.id === fileId)
+      const added = addWhiteboardObject(current, "file", "", boardCenter())
+      const ratio =
+        file?.width && file.height ? file.height / file.width : undefined
+      return {
+        ...added,
+        objects: added.objects.map((o, i) =>
+          i === added.objects.length - 1
+            ? {
+                ...o,
+                fileId,
+                ...(ratio
+                  ? {
+                      height: Math.round(
+                        Math.min(520, Math.max(120, o.width * ratio)) + 34
+                      ),
+                    }
+                  : {}),
+              }
+            : o
+        ),
+      }
+    }, "Placed on the canvas.")
   // Workspace-wide keys. The listener is registered once, so it reaches the
   // current state through this ref.
   const keys = useRef({
@@ -649,6 +845,33 @@ export default function Workspace() {
         value: g.id.slice(0, 8),
         description: `${g.name} (${g.strokes.length} strokes)`,
       })),
+      file: (w.files ?? []).map((f) => ({
+        value: f.id.slice(0, 8),
+        description: f.name,
+      })),
+      folder: (w.folders ?? []).map((f) => ({
+        value: folderName(w, f),
+        description: folderPath(w, f.id),
+      })),
+      node: (w.nodes ?? []).map((n) => ({
+        value: n.name,
+        description: `${nodeProgress(w, n).percent}% of ${n.columns.join(" + ") || "no columns"}`,
+      })),
+      template: TEMPLATES.map((t) => ({ value: t.id, description: t.name })),
+      texfile: [
+        ...texProjects(w).map((p) => ({
+          value: p.name,
+          description: "document",
+        })),
+        ...texProjects(w).flatMap((p) =>
+          projectFiles(w, p.folder)
+            .filter(({ file }) => isTexSource(file.name))
+            .map(({ file, path }) => ({
+              value: file.id.slice(0, 8),
+              description: `${p.name}/${path}`,
+            }))
+        ),
+      ],
     }),
     [w]
   )
@@ -762,8 +985,20 @@ export default function Workspace() {
             : `Nothing to ${which}.`
         )
       }
-      const result = execute(w, input, boardCenter())
+      const result = execute(w, input, boardCenter(), { scheme })
       if (result.workspace !== w) commit(result.workspace)
+      if (result.scheme) chooseScheme(result.scheme)
+      if (result.file) annotate(result.file)
+      if (result.latex && "open" in result.latex) openLatex(result.latex.open)
+      if (result.latex && "create" in result.latex) {
+        const { name, template } = result.latex.create
+        const chosen = TEMPLATES.find((t) => t.id === template)
+        if (chosen)
+          void createLatexProject(change, name, chosen).then(
+            (made) => made && openLatex(made),
+            () => setNotice("Could not make the document in this browser.")
+          )
+      }
       let said = result.output
       // From the workspace's own terminal the keyboard stays at the prompt; a
       // terminal window floats over the views, so there the view just opens.
@@ -1105,6 +1340,125 @@ export default function Workspace() {
           </p>
         )}
         <h2>
+          Checklist{" "}
+          <small>
+            {(task.checklist ?? []).filter((item) => item.done).length}/
+            {(task.checklist ?? []).length}
+          </small>
+        </h2>
+        <div
+          className={styles.taskProgress}
+          role="img"
+          aria-label={`${Math.round(taskProgress(task) * 100)}% complete`}
+        >
+          <i style={{ width: `${taskProgress(task) * 100}%` }} />
+          <span>{Math.round(taskProgress(task) * 100)}%</span>
+        </div>
+        {(task.checklist ?? []).map((item) => (
+          <div className={styles.checkItem} key={item.id}>
+            <input
+              type="checkbox"
+              checked={item.done}
+              aria-label={`Done: ${item.text}`}
+              onChange={(e) =>
+                change((w) =>
+                  updateChecklistItem(w, task.id, item.id, {
+                    done: e.target.checked,
+                  })
+                )
+              }
+            />
+            <input
+              value={item.text}
+              aria-label="Checklist step"
+              className={item.done ? styles.done : ""}
+              onChange={(e) =>
+                change((w) =>
+                  updateChecklistItem(w, task.id, item.id, {
+                    text: e.target.value,
+                  })
+                )
+              }
+            />
+            <button
+              className={styles.iconButton}
+              aria-label={`Remove step: ${item.text}`}
+              title="Remove step"
+              onClick={() =>
+                change((w) => removeChecklistItem(w, task.id, item.id))
+              }
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <form
+          className={styles.checkForm}
+          onSubmit={(e) => {
+            e.preventDefault()
+            const text = formText(e, "step")
+            if (text) {
+              change((w) => addChecklistItem(w, task.id, text))
+              e.currentTarget.reset()
+            }
+          }}
+        >
+          <input
+            name="step"
+            aria-label="New checklist step"
+            placeholder="Add a step…"
+          />
+          <button>Add step</button>
+        </form>
+        <p className={styles.hint}>
+          Ticked steps move this ticket&apos;s percentage, which feeds its
+          column&apos;s bar. Completing the ticket counts as 100%.
+        </p>
+        <h2>
+          Files <small>{ticketFiles(w, task.id).length}</small>
+        </h2>
+        {ticketFiles(w, task.id).length > 0 && (
+          <div className={styles.ticketFiles}>
+            {ticketFiles(w, task.id).map((file) => (
+              <button
+                key={file.id}
+                title={`Open ${file.name} in Annotate`}
+                onClick={() => {
+                  setSplitTask(task.id)
+                  annotate(file.id)
+                }}
+              >
+                <FileThumb file={file} className={styles.ticketFileThumb} />
+                <span>{file.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className={styles.actions}>
+          <label className={styles.fileButton}>
+            Attach files…
+            <input
+              type="file"
+              multiple
+              onChange={(e) => {
+                const list = [...(e.target.files ?? [])]
+                if (list.length) void importFiles(list, { taskId: task.id })
+                e.target.value = ""
+              }}
+            />
+          </label>
+          <button
+            onClick={() => {
+              setSelected(null)
+              setSplitTask(task.id)
+              setFilePlace({ type: "task", id: task.id })
+              open("files")
+            }}
+          >
+            Open folder ↗
+          </button>
+        </div>
+        <h2>
           Linked whiteboard items{" "}
           <small>{ticketCanvasItems(w, task.id).length}</small>
         </h2>
@@ -1306,6 +1660,8 @@ export default function Workspace() {
         <div className={styles.board}>
           {w.columns.map((column) => {
             const fallback = w.columns.find((c) => c !== column)
+            const progress = columnProgress(w, column)
+            const barColor = w.columnColors?.[column]
             return (
               <div
                 className={styles.column}
@@ -1359,6 +1715,27 @@ export default function Workspace() {
                         label: "Rename",
                         onSelect: () => setRenaming(column),
                       },
+                      ...(barColor
+                        ? [
+                            {
+                              label: "Reset bar color",
+                              onSelect: () =>
+                                void change((w) =>
+                                  setColumnColor(w, column, undefined)
+                                ),
+                            },
+                          ]
+                        : []),
+                      ...(w.nodes ?? []).map((node) => {
+                        const connected = node.columns.includes(column)
+                        return {
+                          label: `${connected ? "Disconnect from" : "Connect to"} node: ${node.name}`,
+                          onSelect: () =>
+                            void change((w) =>
+                              connectNode(w, node.id, column, !connected)
+                            ),
+                        }
+                      }),
                       {
                         label: "Delete column",
                         danger: true,
@@ -1410,6 +1787,14 @@ export default function Workspace() {
                       >
                         {t.title}
                       </button>
+                      {!!t.checklist?.length && (
+                        <div
+                          className={styles.ticketSteps}
+                          title={`${t.checklist.filter((item) => item.done).length} of ${t.checklist.length} steps · ${Math.round(taskProgress(t) * 100)}%`}
+                        >
+                          <i style={{ width: `${taskProgress(t) * 100}%` }} />
+                        </div>
+                      )}
                       {(t.labels.length > 0 || t.submission !== "none") && (
                         <div className={styles.badges}>
                           {t.labels.map((id) => {
@@ -1427,6 +1812,8 @@ export default function Workspace() {
                       )}
                       <div className={styles.ticketFoot}>
                         <span>
+                          {!!t.checklist?.length &&
+                            `${t.checklist.filter((item) => item.done).length}/${t.checklist.length} steps · `}
                           {t.comments.length}{" "}
                           {t.comments.length === 1 ? "comment" : "comments"}
                         </span>
@@ -1439,6 +1826,57 @@ export default function Workspace() {
                 {!visible.some((t) => t.column === column) && (
                   <div className={styles.emptyColumn}>
                     Room for your next step.
+                  </div>
+                )}
+                {/* Completion of every ticket in the column: one segment a
+                    ticket, each filled as far as that ticket has come. */}
+                <div
+                  className={styles.columnFoot}
+                  style={
+                    {
+                      "--bar": barColor ?? "var(--alpha-accent)",
+                    } as CSSProperties
+                  }
+                >
+                  <div
+                    className={styles.segments}
+                    role="img"
+                    aria-label={`${column}: ${progress.percent}% complete, ${progress.done} of ${progress.total} tickets done`}
+                  >
+                    {progress.tasks.map((t) => (
+                      <i
+                        key={t.id}
+                        title={`${t.title}: ${Math.round(t.progress * 100)}%`}
+                      >
+                        <b style={{ width: `${t.progress * 100}%` }} />
+                      </i>
+                    ))}
+                  </div>
+                  <strong>{progress.percent}%</strong>
+                  <small>
+                    {progress.done}/{progress.total}
+                  </small>
+                  <input
+                    type="color"
+                    aria-label={`Bar color of ${column}`}
+                    title={`Bar color (or: column color "${column}" #hex)`}
+                    value={
+                      barColor ?? (isHexColor(w.accent) ? w.accent : "#777777")
+                    }
+                    onChange={(e) =>
+                      change((w) => setColumnColor(w, column, e.target.value))
+                    }
+                  />
+                </div>
+                {(w.nodes ?? []).some((n) => n.columns.includes(column)) && (
+                  <div className={styles.nodeChips}>
+                    {(w.nodes ?? [])
+                      .filter((n) => n.columns.includes(column))
+                      .map((n) => (
+                        <span key={n.id} title={`Counts toward the node "${n.name}"`}>
+                          → {n.name}
+                        </span>
+                      ))}
                   </div>
                 )}
               </div>
@@ -1462,10 +1900,189 @@ export default function Workspace() {
             <button>+ Add column</button>
           </form>
         </div>
+        <div className={styles.nodes}>
+          <div className={styles.nodesHead}>
+            <h2>
+              Progress nodes <small>{(w.nodes ?? []).length}</small>
+            </h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                const form = e.currentTarget
+                if (change((w) => addNode(w, formText(e, "node")))) form.reset()
+              }}
+            >
+              <input
+                name="node"
+                required
+                aria-label="New node name"
+                placeholder="Node name, e.g. Release"
+              />
+              <button>+ Node</button>
+            </form>
+          </div>
+          {(w.nodes ?? []).map((node) => {
+            const combined = nodeProgress(w, node)
+            const connected = nodeColumns(w, node)
+            return (
+              <div
+                className={styles.node}
+                key={node.id}
+                style={
+                  {
+                    "--bar": node.color ?? "var(--alpha-accent)",
+                  } as CSSProperties
+                }
+              >
+                <div className={styles.nodeTop}>
+                  <span className={styles.nodeMark} aria-hidden="true" />
+                  {renamingNode === node.id ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        if (
+                          change((w) =>
+                            updateNode(w, node.id, { name: formText(e, "name") })
+                          )
+                        )
+                          setRenamingNode(null)
+                      }}
+                    >
+                      <input
+                        name="name"
+                        required
+                        autoFocus
+                        defaultValue={node.name}
+                        aria-label={`Rename ${node.name}`}
+                        onFocus={(e) => e.currentTarget.select()}
+                        onBlur={() => setRenamingNode(null)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") setRenamingNode(null)
+                        }}
+                      />
+                    </form>
+                  ) : (
+                    <h3 onDoubleClick={() => setRenamingNode(node.id)}>
+                      {node.name}
+                    </h3>
+                  )}
+                  <strong>{combined.percent}%</strong>
+                  <small>
+                    {combined.done}/{combined.total} done
+                  </small>
+                  <input
+                    type="color"
+                    aria-label={`Color of ${node.name}`}
+                    title={`Node color (or: node color "${node.name}" #hex)`}
+                    value={
+                      node.color ?? (isHexColor(w.accent) ? w.accent : "#777777")
+                    }
+                    onChange={(e) =>
+                      change((w) =>
+                        updateNode(w, node.id, { color: e.target.value })
+                      )
+                    }
+                  />
+                  <Menu
+                    label={`${node.name} node options`}
+                    className={styles.moreButton}
+                    items={[
+                      {
+                        label: "Rename",
+                        onSelect: () => setRenamingNode(node.id),
+                      },
+                      ...(node.color
+                        ? [
+                            {
+                              label: "Reset color",
+                              onSelect: () =>
+                                void change((w) =>
+                                  updateNode(w, node.id, { color: undefined })
+                                ),
+                            },
+                          ]
+                        : []),
+                      {
+                        label: "Delete node",
+                        danger: true,
+                        onSelect: () =>
+                          void change(
+                            (w) => deleteNode(w, node.id),
+                            "Node deleted. Ctrl+Z brings it back."
+                          ),
+                      },
+                    ]}
+                  >
+                    ⋯
+                  </Menu>
+                </div>
+                {/* Each connected column takes room for its tickets and is
+                    filled as far as that column has come. */}
+                <div
+                  className={styles.nodeBar}
+                  role="img"
+                  aria-label={`${node.name}: ${combined.percent}% of ${connected.join(", ") || "no columns"} complete`}
+                >
+                  {connected.map((column) => {
+                    const part = columnProgress(w, column)
+                    if (!part.total) return null
+                    return (
+                      <i
+                        key={column}
+                        title={`${column}: ${part.percent}% of ${part.total} ticket${part.total === 1 ? "" : "s"}`}
+                        style={
+                          {
+                            flexGrow: part.total,
+                            ...(w.columnColors?.[column]
+                              ? { "--bar": w.columnColors[column] }
+                              : {}),
+                          } as CSSProperties
+                        }
+                      >
+                        <b style={{ width: `${part.percent}%` }} />
+                      </i>
+                    )
+                  })}
+                </div>
+                <div className={styles.nodeColumns}>
+                  <small>Connected to</small>
+                  {w.columns.map((column) => {
+                    const on = node.columns.includes(column)
+                    return (
+                      <button
+                        key={column}
+                        aria-pressed={on}
+                        title={
+                          on
+                            ? `Disconnect ${column}`
+                            : `Connect ${column}`
+                        }
+                        onClick={() =>
+                          change((w) => connectNode(w, node.id, column, !on))
+                        }
+                      >
+                        {on ? "● " : "○ "}
+                        {column}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          {!(w.nodes ?? []).length && (
+            <p className={styles.hint}>
+              A node connects to several columns and shows their completion
+              combined into one percentage. Create one here, or with node new
+              &quot;Release&quot; &quot;Backlog&quot; &quot;Done&quot;.
+            </p>
+          )}
+        </div>
         <p className={styles.hint}>
           Drag tickets between columns, or move them in Details. Use ⋯ on a
-          column to rename or delete it. Completion is separate from column and
-          submission status.
+          column to rename or delete it. The bar under a column shows every
+          ticket&apos;s completion; pick its color beside it or with column
+          color. Completion is separate from column and submission status.
         </p>
       </section>
     )
@@ -1492,6 +2109,8 @@ export default function Workspace() {
         objects={w.objects ?? []}
         tasks={w.tasks}
         columns={w.columns}
+        files={w.files ?? []}
+        onOpenFile={annotate}
         onObjectChange={(id, patch) =>
           change((w) => ({
             ...w,
@@ -1568,6 +2187,58 @@ export default function Workspace() {
             })
           }, "Task created from your selection.")
         }
+      />
+    )
+  }
+  function files() {
+    return (
+      <FileExplorer
+        w={w}
+        change={change}
+        place={filePlace}
+        onPlace={setFilePlace}
+        onImport={importFiles}
+        onAnnotate={annotate}
+        onOpenTask={(id) => setSplitTask(id)}
+        onCanvas={placeOnCanvas}
+        notify={setNotice}
+      />
+    )
+  }
+  function annotator() {
+    return (
+      <Annotator
+        w={w}
+        fileId={annotating}
+        onPick={setAnnotating}
+        drafts={drafts}
+        onDraft={(id, annotation) =>
+          setDrafts((prev) => {
+            const next = { ...prev }
+            if (annotation) next[id] = annotation
+            else delete next[id]
+            return next
+          })
+        }
+        change={change}
+        onImport={importFiles}
+        onOpenTask={(id) => setSplitTask(id)}
+        onPlace={placeOnCanvas}
+        notify={setNotice}
+      />
+    )
+  }
+  function latex() {
+    return (
+      <LatexEditor
+        w={w}
+        change={change}
+        amend={amend}
+        open={latexOpen}
+        onOpen={setLatexOpen}
+        onImport={importFiles}
+        onAnnotate={annotate}
+        notify={setNotice}
       />
     )
   }
@@ -1850,10 +2521,58 @@ export default function Workspace() {
         <p className={styles.eyebrow}>MAKE YOURSELF AT HOME</p>
         <h1>Customize your space</h1>
         <div className={styles.panel}>
-          <h2>Website theme</h2>
+          <h2>Site theme</h2>
           <p className={styles.muted}>
-            Original follows the website’s black-and-white theme. Optional
-            palettes change the accent color.
+            The color schemes a terminal ships with — Windows Terminal&apos;s,
+            which PowerShell runs in, and Ubuntu&apos;s — applied to the whole
+            website: every page, and the terminal itself. Default is the
+            site&apos;s own look. Remembered on this device; in the terminal,
+            theme list and theme &lt;name&gt;.
+          </p>
+          <div className={styles.schemes}>
+            <button
+              className={styles.scheme}
+              aria-pressed={scheme === DEFAULT_SCHEME}
+              onClick={() => chooseScheme(DEFAULT_SCHEME)}
+            >
+              <span className={styles.schemeDefault} aria-hidden="true">
+                <b>i/ iterations</b>
+              </span>
+              Default
+            </button>
+            {SCHEMES.map((s) => (
+              <button
+                key={s.id}
+                className={styles.scheme}
+                aria-pressed={scheme === s.id}
+                onClick={() => chooseScheme(s.id)}
+              >
+                <span
+                  className={styles.schemePreview}
+                  aria-hidden="true"
+                  style={{ background: s.background, color: s.foreground }}
+                >
+                  <b>
+                    <span style={{ color: s.accent }}>&gt;_</span> theme
+                  </b>
+                  <span>
+                    {[s.red, s.green, s.yellow, s.blue, s.purple, s.cyan].map(
+                      (color, i) => (
+                        <i key={i} style={{ background: color }} />
+                      )
+                    )}
+                  </span>
+                </span>
+                {s.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={styles.panel}>
+          <h2>Accent color</h2>
+          <p className={styles.muted}>
+            Original uses the theme&apos;s own accent. The other palettes change
+            only the accent color, on top of whichever site theme is active.
           </p>
           <div className={styles.swatches}>
             {Object.entries(THEMES).map(([name, color]) => (
@@ -1888,6 +2607,12 @@ export default function Workspace() {
           </div>
           <div className={styles.actions}>
             <button
+              disabled={scheme !== DEFAULT_SCHEME}
+              title={
+                scheme !== DEFAULT_SCHEME
+                  ? "The site theme decides light or dark. Switch to Default to choose."
+                  : undefined
+              }
               onClick={() =>
                 setTheme(resolvedTheme === "dark" ? "light" : "dark")
               }
@@ -2206,7 +2931,18 @@ export default function Workspace() {
     )
   }
   const render = (tab: View) =>
-    ({ terminal, board, canvas, stats, inbox, history, settings })[tab]()
+    ({
+      terminal,
+      board,
+      canvas,
+      files,
+      annotate: annotator,
+      latex,
+      stats,
+      inbox,
+      history,
+      settings,
+    })[tab]()
   const unopened = VIEWS.filter((v) => !tabs.includes(v))
   // A ticket or a docked terminal sits beside the panes, behind a divider.
   const docked = ready && terminalOpen && terminalMode === "split"
@@ -2348,7 +3084,7 @@ export default function Workspace() {
                 }
                 renderLeaf={(pane) => (
                   <div
-                    className={`${styles.pane} ${pane.view === "canvas" ? styles.canvasPane : ""}`}
+                    className={`${styles.pane} ${pane.view === "canvas" ? styles.canvasPane : ""} ${pane.view === "files" || pane.view === "annotate" || pane.view === "latex" ? styles.fillPane : ""}`}
                   >
                     {pane.view ? (
                       render(pane.view)

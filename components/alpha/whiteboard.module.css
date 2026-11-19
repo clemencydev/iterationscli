@@ -871,3 +871,24 @@
 .groupForm input {
   width: 100%;
 }
+
+/* File node: a file from the explorer, opened in Annotate with a click. */
+.whiteboard .fileOpen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.fileShown {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+.fileOpen .linkText {
+  flex: none;
+}
