@@ -1768,3 +1768,11 @@
   width: 12px;
   height: 6px;
 }
+
+.floatingFiles {
+  z-index: 45;
+  width: min(640px, calc(100vw - 16px));
+  height: min(420px, calc(100dvh - 16px));
+  border-radius: var(--radius);
+  container-type: inline-size;
+}

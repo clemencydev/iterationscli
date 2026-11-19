@@ -138,14 +138,14 @@ export function keepStorage() {
 }
 
 /** The pixel size of an image or video file, when the browser can read it. */
-export function mediaSize(file: Blob): Promise<{ width: number; height: number } | null> {
+export function mediaSize(file: Blob, kind = file.type.split("/")[0]): Promise<{ width: number; height: number; duration?: number } | null> {
   const url = URL.createObjectURL(file)
   const done = <T,>(value: T) => {
     URL.revokeObjectURL(url)
     return value
   }
   return new Promise((resolve) => {
-    if (file.type.startsWith("image/")) {
+    if (kind === "image") {
       const image = new Image()
       image.onload = () =>
         resolve(
@@ -157,14 +157,14 @@ export function mediaSize(file: Blob): Promise<{ width: number; height: number }
         )
       image.onerror = () => resolve(done(null))
       image.src = url
-    } else if (file.type.startsWith("video/")) {
+    } else if (kind === "video") {
       const video = document.createElement("video")
       video.preload = "metadata"
       video.onloadedmetadata = () =>
         resolve(
           done(
             video.videoWidth
-              ? { width: video.videoWidth, height: video.videoHeight }
+              ? { width: video.videoWidth, height: video.videoHeight, duration: Number.isFinite(video.duration) ? video.duration : undefined }
               : null
           )
         )

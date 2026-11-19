@@ -11,6 +11,7 @@ import {
 } from "@/lib/alpha"
 import { fileKind, formatBytes, type FileEntry } from "@/lib/files"
 import { describeAnnotation } from "@/lib/annotations"
+import { CanvasVideo } from "./Annotator"
 import { FileThumb } from "./Shapes"
 import styles from "./whiteboard.module.css"
 import BoardIcon from "./BoardIcon"
@@ -297,6 +298,7 @@ export default function BoardObject({
     item.kind === "link" ? tasks.find((t) => t.id === item.taskId) : undefined
   const file =
     item.kind === "file" ? files.find((f) => f.id === item.fileId) : undefined
+  const isVideo = file && fileKind(file.mime, file.name) === "video"
   const header = (
     <div className={styles.objectHeader}>
       <button
@@ -412,6 +414,12 @@ export default function BoardObject({
             </option>
           ))}
         </select>
+      )}
+      {isVideo && (
+        <button type="button" title="Open in Annotate" aria-label={`Open ${file.name} in Annotate`}
+          onClick={() => onOpenFile(file.id)}>
+          <BoardIcon name="open" size={16} />
+        </button>
       )}
       {item.kind === "kanban" && (
         <button
@@ -536,6 +544,10 @@ export default function BoardObject({
             text={item.text}
             onChange={(html, text) => onChange({ html, text })}
           />
+        ) : isVideo ? (
+          <div className={styles.videoNode} onKeyDown={(e) => e.stopPropagation()}>
+            <CanvasVideo key={file.id} file={file} />
+          </div>
         ) : item.kind === "file" ? (
           file ? (
             <button
@@ -559,7 +571,7 @@ export default function BoardObject({
               {item.fileId
                 ? "This file is no longer in the explorer. Choose another above."
                 : files.length
-                  ? "Choose a file above. Clicking this node then opens it in Annotate."
+                  ? "Choose a file above to view it."
                   : "No files yet. Import some in Files first."}
             </p>
           )

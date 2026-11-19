@@ -6,6 +6,7 @@
 // keeps the original untouched and stores the result as a copy beside it.
 import {
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,10 @@ import {
   editsSrt,
   FRAME_RATES,
   keptSegments,
+  moveSegment,
+  textVisibleAt,
+  toRecord,
+  videoSources,
   marksCsv,
   parseClock,
   tidyEdits,
@@ -30,6 +35,7 @@ import {
   type Point,
   type Shape,
   type VideoEdit,
+  type VideoSource,
 } from "@/lib/annotations"
 import {
   addFile,
@@ -43,6 +49,7 @@ import {
   saveAnnotatedCopy,
   tieFile,
   updateFile,
+  videoFolder,
   type FileEntry,
   type FileKind,
 } from "@/lib/files"
@@ -64,7 +71,7 @@ type Props = {
   onDraft: (fileId: string, annotation: Annotation | undefined) => void
   change: Change
   /** Imports files into the explorer and returns their ids. */
-  onImport: (files: File[]) => Promise<string[]>
+  onImport: (files: File[], where?: { videoId: string }) => Promise<string[]>
   onOpenTask: (id: string) => void
   /** Puts a file on the canvas. */
   onPlace: (fileId: string) => void
@@ -240,6 +247,7 @@ function Editor({
   w,
   file,
   onPick,
+  onImport,
   drafts,
   onDraft,
   change,
@@ -255,8 +263,9 @@ function Editor({
     onDraft(file.id, { ...annotation, ...patch })
   const [tie, setTie] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [revision, setRevision] = useState(0)
   // The length of the audio or video, once the browser has read it.
-  const [duration, setDuration] = useState(annotation.duration ?? 0)
+  const [duration, setDuration] = useState(file.duration ?? annotation.duration ?? 0)
   const original = file.copyOf
     ? (w.files ?? []).find((f) => f.id === file.copyOf)
     : undefined
@@ -264,8 +273,15 @@ function Editor({
   const tasks = fileTasks(w, file)
   const notes = annotation.notes ?? []
   const timed = kind === "video" || kind === "audio"
+  const holder = videoFolder(w, file)
+  const [importing, setImporting] = useState(false)
+  const clipFiles = holder ? (w.files ?? []).filter((f) =>
+    f.folder === holder.id && fileKind(f.mime, f.name) === "video"
+  ) : []
   const exported = {
-    name: file.name,
+    name: original?.name ?? file.name,
+    sources: annotation.sources,
+    clipOrder: annotation.clipOrder,
     duration,
     edits: annotation.edits ?? [],
     marks: annotation.marks ?? [],
@@ -283,8 +299,8 @@ function Editor({
       }
       // A video's changes also go into the explorer as the CSV an editor reads.
       const csv =
-        kind === "video" && (result.edits?.length || result.marks?.length)
-          ? editsCsv({ ...exported, name: file.name })
+        kind === "video" && (result.edits?.length || result.marks?.length || result.sources?.length || result.clipOrder?.length)
+          ? editsCsv(exported)
           : null
       const csvKey = csv
         ? await putBlob(new Blob([csv], { type: "text/csv" }))
@@ -380,7 +396,10 @@ function Editor({
         {dirty && <span className={styles.unsaved}>Unsaved changes</span>}
         {dirty && (
           <button
-            onClick={() => onDraft(file.id, undefined)}
+            onClick={() => {
+              onDraft(file.id, undefined)
+              setRevision((value) => value + 1)
+            }}
             title="Throw away the changes since the last save"
           >
             Discard
@@ -421,7 +440,9 @@ function Editor({
             />
           ) : timed ? (
             <MediaStage
+              key={revision}
               video={kind === "video"}
+              sourceName={exported.name}
               url={url}
               file={file}
               annotation={annotation}
@@ -434,6 +455,28 @@ function Editor({
           )}
         </div>
         <aside className={styles.side}>
+          {kind === "video" && (
+            <Section title="Project clips">
+              {holder && <small>{folderPath(w, holder.id)}</small>}
+              <label className={styles.importButton}>
+                {importing ? "Importing…" : "Import clips…"}
+                <input type="file" accept="video/*" multiple disabled={importing}
+                  onChange={async (e) => {
+                    const picked = [...(e.target.files ?? [])]
+                    e.target.value = ""
+                    if (!picked.length) return
+                    setImporting(true)
+                    try { await onImport(picked, { videoId: file.id }) }
+                    finally { setImporting(false) }
+                  }}
+                />
+              </label>
+              {clipFiles.map((clip) => (
+                <ProjectClip key={clip.id} file={clip} ready={duration > 0}
+                  onAdd={(source) => edit({ sources: [...(annotation.sources ?? []), source] })} />
+              ))}
+            </Section>
+          )}
           <Section title="Tied to">
             <div className={styles.chips}>
               {tasks.map((id) => {
@@ -940,26 +983,69 @@ function ImageStage({
 
 // ---- Video and audio -------------------------------------------------------
 
+/** Older workspace files did not store their duration at import. */
+function ProjectClip({ file, ready, onAdd }: {
+  file: FileEntry
+  ready: boolean
+  onAdd: (source: VideoSource) => void
+}) {
+  const [duration, setDuration] = useState(file.duration)
+  const url = useBlobUrl(file.duration ? undefined : file.blob)
+  return (
+    <div className={styles.row}>
+      {!file.duration && url && (
+        <video hidden preload="metadata" src={url} onLoadedMetadata={(e) => {
+          if (Number.isFinite(e.currentTarget.duration)) setDuration(e.currentTarget.duration)
+        }} />
+      )}
+      <span className={styles.grow}>{file.name}</span>
+      <button disabled={!ready || !duration}
+        aria-label={`Add ${file.name} to timeline`}
+        onClick={() => {
+          if (duration) onAdd({ name: file.name, blob: file.blob, duration })
+        }}>
+        Add to timeline
+      </button>
+    </div>
+  )
+}
+
+/** Plays a file in its canvas node, including the saved edit sequence. */
+export function CanvasVideo({ file }: { file: FileEntry }) {
+  const url = useBlobUrl(file.blob)
+  const [duration, setDuration] = useState(file.duration ?? file.annotation?.duration ?? 0)
+  if (!url) return (
+    <p role="status" className={styles.canvasStatus}>
+      {url === null ? "Video unavailable on this device." : "Loading video…"}
+    </p>
+  )
+  return (
+    <MediaStage video url={url} file={file} sourceName={file.name}
+      annotation={file.annotation ?? EMPTY} duration={duration} onDuration={setDuration} />
+  )
+}
+
 function MediaStage({
+  sourceName,
   video,
   url,
   file,
   annotation,
   edit,
-  duration,
+  duration: primaryDuration,
   onDuration,
 }: {
+  sourceName: string
   video: boolean
   url: string
   file: FileEntry
   annotation: Annotation
-  edit: (patch: Partial<Annotation>) => void
+  edit?: (patch: Partial<Annotation>) => void
   duration: number
   onDuration: (seconds: number) => void
 }) {
   // One player, whichever element it is: both are media elements.
   const media = useRef<HTMLMediaElement>(null)
-  const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [range, setRange] = useState<{ in?: number; out?: number }>({})
   const [previewCuts, setPreviewCuts] = useState(true)
@@ -976,58 +1062,106 @@ function MediaStage({
   const edits = useMemo(() => annotation.edits ?? [], [annotation.edits])
   const marks = annotation.marks ?? []
   const fps = annotation.fps ?? 30
+  const sources = useMemo(() => videoSources({
+    name: sourceName, blob: file.blob, duration: primaryDuration,
+  }, annotation.sources), [sourceName, file.blob, primaryDuration, annotation.sources])
+  const duration = sources[sources.length - 1].end
   const cuts = useMemo(() => cutRanges(edits, duration), [edits, duration])
   const segments = useMemo(
-    () => keptSegments(edits, duration),
-    [edits, duration]
+    () => keptSegments(edits, duration, annotation.clipOrder, sources.slice(1).map((s) => s.start)),
+    [edits, duration, annotation.clipOrder, sources]
   )
+  const first = edit ? 0 : (segments[0]?.start ?? 0)
+  const [time, setTime] = useState(first)
+  const [sourceIndex, setSourceIndex] = useState(() => Math.max(0, sources.findIndex((s) => first < s.end)))
+  const activeSource = sources[sourceIndex] ?? sources[0]
+  const extraUrl = useBlobUrl(activeSource.blob === file.blob ? undefined : activeSource.blob)
+  const sourceUrl = activeSource.blob === file.blob ? url : extraUrl
   const kept = segments.reduce((sum, s) => sum + (s.end - s.start), 0)
   const percent = (seconds: number) =>
     `${duration ? clamp(seconds / duration) * 100 : 0}%`
 
-  // While playing, follow the playhead every frame and skip what is cut.
+  const sequence = previewCuts && video ? segments : sources
+  const pending = useRef<{ at: number; play: boolean } | null>(first > 0 ? { at: first, play: false } : null)
+  const playingFrom = useRef(first)
+  const [finished, setFinished] = useState(false)
+  const [muted, setMuted] = useState(false)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const failed = !!sourceUrl && failedUrl === sourceUrl
+  const [dragged, setDragged] = useState<number | null>(null)
+
+  function go(seconds: number, play: boolean) {
+    const at = clamp(seconds, 0, duration)
+    const index = sources.findIndex((s) => at < s.end)
+    const next = index < 0 ? sources.length - 1 : index
+    const element = media.current
+    setFinished(false)
+    playingFrom.current = at
+    setTime(at)
+    if (sources[next] !== activeSource || !element || element.readyState < 1) {
+      setPlaying(false)
+      pending.current = { at, play }
+      setSourceIndex(next)
+      return
+    }
+    pending.current = null
+    element.currentTime = at - activeSource.start
+    if (play) void element.play().catch(() => setPlaying(false))
+    else element.pause()
+  }
+  const seek = (seconds: number) => go(seconds, pending.current?.play ?? playing)
+  function playFrom(at: number) {
+    const clip = sequence.find((s) => s.start <= at && at < s.end)
+    const next = clip ?? sequence.find((s) => s.start >= at) ?? sequence[0]
+    if (next) go(clip ? at : next.start, true)
+  }
+  function toggle() {
+    const element = media.current
+    if (element && !element.paused) {
+      element.pause()
+    } else if (sequence.length) {
+      playFrom(finished ? sequence[0].start : time)
+    }
+  }
+  function advance(ended = false) {
+    const element = media.current
+    if (!element || pending.current || element.seeking) return
+    const now = activeSource.start + element.currentTime
+    const index = sequence.findIndex((s) => s.start <= playingFrom.current && playingFrom.current < s.end)
+    const clip = sequence[index]
+    if (!clip) {
+      if (sequence.length) playFrom(now)
+      else { element.pause(); setPlaying(false) }
+    } else if (ended || now >= clip.end) {
+      const next = sequence[index + 1]
+      if (next) go(next.start, true)
+      else {
+        element.pause()
+        element.currentTime = clip.end - activeSource.start
+        setTime(clip.end)
+        setFinished(true)
+        setPlaying(false)
+      }
+    } else setTime(now)
+  }
+  const updateFrame = useEffectEvent(() => advance())
   useEffect(() => {
     if (!playing) return
-    let request = 0
+    let request: number
     const tick = () => {
-      const element = media.current
-      if (element) {
-        let now = element.currentTime
-        const cut = previewCuts
-          ? cuts.find((c) => now >= c.start && now < c.end - 0.02)
-          : undefined
-        if (cut) {
-          if (cut.end >= duration - 0.05) element.pause()
-          else element.currentTime = now = cut.end
-        }
-        setTime(now)
-      }
+      updateFrame()
       request = requestAnimationFrame(tick)
     }
     request = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(request)
-  }, [playing, previewCuts, cuts, duration])
-
-  const seek = (seconds: number) => {
-    const element = media.current
-    if (!element) return
-    const to = clamp(seconds, 0, duration || 0)
-    element.currentTime = to
-    setTime(to)
-  }
-  const toggle = () => {
-    const element = media.current
-    if (!element) return
-    if (element.paused) void element.play().catch(() => {})
-    else element.pause()
-  }
-  const setEdits = (next: VideoEdit[]) => edit({ edits: next })
+  }, [playing])
+  const setEdits = (next: VideoEdit[]) => edit?.({ edits: next })
   const patchEdit = (id: string, patch: Partial<VideoEdit>) =>
     setEdits(
       edits.map((e) => (e.id === id ? ({ ...e, ...patch } as VideoEdit) : e))
     )
   const split = () => {
-    if (time <= 0.01 || time >= duration - 0.01) return
+    if (time <= 0.01 || time >= duration - 0.01 || edits.some((e) => e.kind === "split" && e.at === time)) return
     setEdits([...edits, { id: uid(), kind: "split", at: time }])
   }
   const hasRange =
@@ -1043,6 +1177,7 @@ function MediaStage({
   const addText = () => {
     const start = hasRange ? range.in! : time
     const end = hasRange ? range.out! : Math.min(duration || time + 3, time + 3)
+    if (end <= start) return
     const id = uid()
     setEdits([
       ...edits,
@@ -1059,9 +1194,155 @@ function MediaStage({
     (e): e is Extract<VideoEdit, { kind: "text" }> => e.kind === "text"
   )
   const shown = texts.filter(
-    (t) => (time >= t.start && time < t.end) || t.id === selected
+    (t) => sourceUrl && textVisibleAt(t, time)
   )
   const sorted = tidyEdits(edits, duration || Infinity)
+
+  const stage = (
+    <div className={styles.stage} ref={space}>
+      {(failed || sourceUrl === null) && <span role="status" className={styles.mediaError}>
+        {failed ? "This browser could not play the video." : "Clip unavailable on this device."}
+      </span>}
+      {video ? (
+        <div
+          ref={frame}
+          className={styles.frame}
+          style={box ?? { visibility: "hidden" }}
+          onPointerMove={(e) => {
+            const id = dragText.current
+            if (!id || !frame.current) return
+            const rect = frame.current.getBoundingClientRect()
+            patchEdit(id, {
+              x: clamp((e.clientX - rect.left) / rect.width),
+              y: clamp((e.clientY - rect.top) / rect.height),
+            })
+          }}
+          onPointerUp={() => {
+            dragText.current = null
+          }}
+        >
+          <video
+            key={activeSource.start}
+            ref={media as RefObject<HTMLVideoElement | null>}
+            src={sourceUrl ?? undefined}
+            playsInline
+            muted={muted}
+            preload="metadata"
+            onClick={toggle}
+            onLoadedMetadata={(e) => {
+              const element = e.currentTarget
+              if (activeSource === sources[0] && Number.isFinite(element.duration))
+                onDuration(element.duration)
+              const target = pending.current
+              if (target) {
+                pending.current = null
+                element.currentTime = clamp(target.at - activeSource.start, 0, element.duration)
+                if (target.play) void element.play().catch(() => setPlaying(false))
+              }
+              if (element.videoWidth)
+                setNatural({
+                  width: element.videoWidth,
+                  height: element.videoHeight,
+                })
+            }}
+            onDurationChange={(e) => {
+              if (activeSource === sources[0] && Number.isFinite(e.currentTarget.duration))
+                onDuration(e.currentTarget.duration)
+            }}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onEnded={() => advance(true)}
+            onError={() => {
+              setPlaying(false)
+              setFailedUrl(sourceUrl ?? null)
+            }}
+            onTimeUpdate={(e) => {
+              if (!pending.current) setTime(activeSource.start + e.currentTarget.currentTime)
+            }}
+          />
+          {shown.map((t) => (
+            <span
+              key={t.id}
+              className={styles.caption}
+              data-selected={t.id === selected ? "" : undefined}
+              title={edit ? "Drag to place" : undefined}
+              style={{
+                left: `${t.x * 100}%`,
+                top: `${t.y * 100}%`,
+                fontSize: box ? Math.max(11, box.width * 0.035) : 16,
+              }}
+              onPointerDown={edit && ((e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                frame.current?.setPointerCapture(e.pointerId)
+                dragText.current = t.id
+                setSelected(t.id)
+              })}
+            >
+              {t.text || "Text"}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className={styles.audio}>
+          <audio
+            ref={media as RefObject<HTMLAudioElement | null>}
+            src={url}
+            preload="metadata"
+            onLoadedMetadata={(e) => {
+              if (Number.isFinite(e.currentTarget.duration))
+                onDuration(e.currentTarget.duration)
+            }}
+            onDurationChange={(e) => {
+              if (Number.isFinite(e.currentTarget.duration))
+                onDuration(e.currentTarget.duration)
+            }}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onEnded={() => setPlaying(false)}
+            onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+          />
+          <Waveform file={file} progress={duration ? time / duration : 0} />
+          <p>
+            Audio annotation is a work in progress: for now it takes comments
+            at any moment of the recording.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+  if (!edit) {
+    const position = finished ? kept : toRecord(time, segments) ?? 0
+    return (
+      <div className={styles.canvasPlayer} role="group" aria-label={file.name}>
+        {stage}
+        <div className={styles.canvasTransport}>
+          <button type="button" onClick={toggle} disabled={!kept || !sourceUrl || failed}
+            aria-label={playing ? "Pause video" : "Play video"}>
+            {playing ? "❚❚" : "▶"}
+          </button>
+          <input type="range" aria-label="Video position" aria-valuetext={clock(position)}
+            min={0} max={kept} step="any" value={position} disabled={!kept}
+            onChange={(e) => {
+              let remaining = Number(e.target.value)
+              for (const clip of segments) {
+                const length = clip.end - clip.start
+                if (remaining < length) return seek(clip.start + remaining)
+                remaining -= length
+              }
+              const last = segments.at(-1)
+              if (last) {
+                go(Math.max(last.start, last.end - 0.001), false)
+                setFinished(true)
+              }
+            }} />
+          <small>{clock(position)} / {clock(kept)}</small>
+          <button type="button" onClick={() => setMuted(!muted)} aria-pressed={muted}
+            aria-label="Mute video">{muted ? "Unmute" : "Mute"}</button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -1087,100 +1368,7 @@ function MediaStage({
         e.preventDefault()
       }}
     >
-      <div className={styles.stage} ref={space}>
-        {video ? (
-          <div
-            ref={frame}
-            className={styles.frame}
-            style={box ?? { visibility: "hidden" }}
-            onPointerMove={(e) => {
-              const id = dragText.current
-              if (!id || !frame.current) return
-              const rect = frame.current.getBoundingClientRect()
-              patchEdit(id, {
-                x: clamp((e.clientX - rect.left) / rect.width),
-                y: clamp((e.clientY - rect.top) / rect.height),
-              })
-            }}
-            onPointerUp={() => {
-              dragText.current = null
-            }}
-          >
-            <video
-              ref={media as RefObject<HTMLVideoElement | null>}
-              src={url}
-              playsInline
-              preload="metadata"
-              onClick={toggle}
-              onLoadedMetadata={(e) => {
-                const element = e.currentTarget
-                if (Number.isFinite(element.duration))
-                  onDuration(element.duration)
-                if (!natural && element.videoWidth)
-                  setNatural({
-                    width: element.videoWidth,
-                    height: element.videoHeight,
-                  })
-              }}
-              onDurationChange={(e) => {
-                if (Number.isFinite(e.currentTarget.duration))
-                  onDuration(e.currentTarget.duration)
-              }}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
-              onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-            />
-            {shown.map((t) => (
-              <span
-                key={t.id}
-                className={styles.caption}
-                data-selected={t.id === selected ? "" : undefined}
-                title="Drag to place"
-                style={{
-                  left: `${t.x * 100}%`,
-                  top: `${t.y * 100}%`,
-                  fontSize: box ? Math.max(11, box.width * 0.035) : 16,
-                }}
-                onPointerDown={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  frame.current?.setPointerCapture(e.pointerId)
-                  dragText.current = t.id
-                  setSelected(t.id)
-                }}
-              >
-                {t.text || "Text"}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <div className={styles.audio}>
-            <audio
-              ref={media as RefObject<HTMLAudioElement | null>}
-              src={url}
-              preload="metadata"
-              onLoadedMetadata={(e) => {
-                if (Number.isFinite(e.currentTarget.duration))
-                  onDuration(e.currentTarget.duration)
-              }}
-              onDurationChange={(e) => {
-                if (Number.isFinite(e.currentTarget.duration))
-                  onDuration(e.currentTarget.duration)
-              }}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onEnded={() => setPlaying(false)}
-              onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-            />
-            <Waveform file={file} progress={duration ? time / duration : 0} />
-            <p>
-              Audio annotation is a work in progress: for now it takes comments
-              at any moment of the recording.
-            </p>
-          </div>
-        )}
-      </div>
+      {stage}
       <div className={styles.transport}>
         <button
           onClick={toggle}
@@ -1189,9 +1377,14 @@ function MediaStage({
         >
           {playing ? "❚❚" : "▶"}
         </button>
-        <code>
-          {clock(time)} / {clock(duration)}
+        <code title={video ? "Source playhead" : "Playhead"}>
+          {video ? "Source " : ""}{clock(time)} / {clock(duration)}
         </code>
+        {video && previewCuts && (
+          <code title="Position in the edited sequence">
+            Sequence {clock(finished ? kept : toRecord(time, segments) ?? 0)} / {clock(kept)}
+          </code>
+        )}
         {video && (
           <>
             <button onClick={split} title="Split the clip at the playhead (S)">
@@ -1230,7 +1423,7 @@ function MediaStage({
                 checked={previewCuts}
                 onChange={(e) => setPreviewCuts(e.target.checked)}
               />
-              Skip cuts when playing
+              Play edited sequence
             </label>
           </>
         )}
@@ -1318,6 +1511,43 @@ function MediaStage({
         ))}
         <i className={styles.playhead} style={{ left: percent(time) }} />
       </div>
+      {video && segments.length > 0 && (
+        <div className={styles.sequence} role="group" aria-label="Clip order">
+          <button onClick={() => { setPreviewCuts(true); go(segments[0].start, true) }}>Play sequence</button>
+          {segments.map((s, i) => {
+            const source = sources.find((part) => s.start < part.end)!
+            const move = (from: number, to: number) => {
+              const order = moveSegment(segments, from, to)
+              go(order[0].start, false)
+              edit({ clipOrder: order })
+            }
+            return (
+              <div key={s.start} draggable data-dragging={dragged === i || undefined}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData("application/x-iterations-segment", String(i))
+                  e.dataTransfer.effectAllowed = "move"
+                  setDragged(i)
+                }}
+                onDragEnd={() => setDragged(null)}
+                onDragOver={(e) => { if (dragged !== null) e.preventDefault() }}
+                onDrop={(e) => {
+                  if (dragged === null) return
+                  e.preventDefault()
+                  move(dragged, i)
+                  setDragged(null)
+                }}>
+                <button title="Seek to clip" onClick={() => go(s.start, false)}>
+                  {i + 1}. {source.name} · {clock(s.start - source.start)}–{clock(s.end - source.start)}
+                </button>
+                <button aria-label={`Move clip ${i + 1} earlier`} disabled={!i}
+                  onClick={() => move(i, i - 1)}>←</button>
+                <button aria-label={`Move clip ${i + 1} later`} disabled={i === segments.length - 1}
+                  onClick={() => move(i, i + 1)}>→</button>
+              </div>
+            )
+          })}
+        </div>
+      )}
       {video && (
         <p className={styles.summary}>
           {duration

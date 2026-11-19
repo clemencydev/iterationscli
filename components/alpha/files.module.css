@@ -380,3 +380,14 @@ span.twist {
   color: var(--dim);
   font-size: 11px;
 }
+
+@container (min-width: 450px) and (max-width: 650px) {
+  .explorer { flex-direction: row; }
+  .tree {
+    width: 145px;
+    max-height: none;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+  }
+  .main { padding: 12px; overflow: auto; }
+}

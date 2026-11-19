@@ -948,6 +948,7 @@ CANVAS
   ends <arrow-id> <start> <end>       Line ends: none arrow dot diamond
   wb name <drawing-id> "Name"         Name a group of pen strokes
 FILES
+  explorer                           Open the floating file explorer
   files ["filter"]                    The explorer as text; a filter searches every folder
   folder list|new|color|rename        folder new "Name" [#hex] ["Parent folder"]
          ticket|delete                folder color "Name" #hex|reset
@@ -1067,6 +1068,7 @@ export type CommandResult = {
     | { op: "close"; view: View }
     | { op: "only" }
   confirm?: { type: "merge" | "revert"; id: string }
+  explorer?: boolean
   clear?: boolean
   /** `cd`: go to a view without leaving the terminal. */
   go?: View
@@ -1545,6 +1547,8 @@ export function execute(
       `${now.name}: ${nodeColumns(next, now).join(" + ") || "no columns"} · ${p.percent}%`
     )
   }
+  if (verb === "explorer" || (verb === "files" && !sub))
+    return { ...result(w, verb === "files" ? filesText(w) : "File explorer opened."), explorer: true }
   if (verb === "files" || (verb === "file" && (!sub || sub === "list")))
     return result(
       w,

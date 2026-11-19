@@ -9,6 +9,8 @@ import {
   editsSrt,
   keptSegments,
   marksCsv,
+  moveSegment,
+  textVisibleAt,
   parseClock,
   recordRanges,
   srtTime,
@@ -154,4 +156,30 @@ test("audio comments export in order, and annotations describe themselves", () =
     "2 drawings · 1 edit · 2 comments"
   )
   assert.equal(describeAnnotation(undefined), "")
+})
+
+test("moved clips keep their order through later cuts, splits and exports across files", () => {
+  const original = keptSegments([split(2)], 8, [], [5])
+  const order = moveSegment(original, 2, 1)
+  const data = {
+    name: "main.mp4", duration: 5, sources: [{ name: "extra.mp4", blob: "b", duration: 3 }],
+    edits: [split(2), cut(6, 7), text(1, 3, "title")], clipOrder: order,
+  }
+  assert.deepEqual(keptSegments(data.edits, 8, order, [5]), [
+    { start: 0, end: 2 }, { start: 5, end: 6 }, { start: 7, end: 8 }, { start: 2, end: 5 },
+  ])
+  const clips = editsCsv(data).split("\r\n").filter((row) => row.startsWith("clip,"))
+  assert.match(clips[2], /00:00:02:00,00:00:03:00,00:00:03:00,00:00:04:00,2,3,,,,extra.mp4/)
+  assert.deepEqual(editsEdl(data).match(/FROM CLIP NAME: .+/g), [
+    "FROM CLIP NAME: main.mp4", "FROM CLIP NAME: extra.mp4",
+    "FROM CLIP NAME: extra.mp4", "FROM CLIP NAME: main.mp4",
+  ])
+  assert.match(editsSrt(data), /00:00:01,000 --> 00:00:02,000[\s\S]*00:00:04,000 --> 00:00:05,000/)
+  assert.equal(toRecord(2, order), 5)
+})
+
+test("text is visible only from its in point up to its out point", () => {
+  const caption = text(2, 3, "title")
+  assert.deepEqual([1.99, 2, 2.99, 3, 4].map((at) => textVisibleAt(caption, at)),
+    [false, true, true, false, false])
 })

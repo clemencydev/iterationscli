@@ -63,7 +63,7 @@ const CREATE: [WhiteboardObject["kind"], string, string][] = [
     "Ticket",
     "Add a ticket link. Clicking it opens the ticket beside the canvas",
   ],
-  ["file", "File", "Add a file from the explorer. Clicking it opens Annotate"],
+  ["file", "File", "Add a file from the explorer"],
 ]
 
 export default function Whiteboard({
@@ -84,6 +84,7 @@ export default function Whiteboard({
   columns,
   files,
   onOpenFile,
+  onImportVideo,
   onObjectChange,
   onObjectDelete,
   onObjectAdd,
@@ -123,6 +124,7 @@ export default function Whiteboard({
   /** The explorer's files, for file nodes. */
   files: FileEntry[]
   onOpenFile: (id: string) => void
+  onImportVideo: (file: File) => Promise<void>
   onObjectChange: (id: string, patch: Partial<WhiteboardObject>) => void
   onObjectDelete: (id: string) => void
   onObjectAdd: (kind: WhiteboardObject["kind"]) => void
@@ -139,6 +141,8 @@ export default function Whiteboard({
     action: SelectionAction
   ) => void
 }) {
+  const videoInput = useRef<HTMLInputElement>(null)
+  const [importingVideo, setImportingVideo] = useState(false)
   const [tool, setTool] = useState<"select" | "pen" | "hand" | "eraser">(
     "select"
   )
@@ -716,6 +720,19 @@ export default function Whiteboard({
         </button>
         <div className={styles.toolDivider} />
         <span className={styles.toolCaption}>ADD</span>
+        <button type="button" onClick={() => videoInput.current?.click()}
+          disabled={importingVideo} aria-label="Import video" title="Import a video to play on the whiteboard">
+          <BoardIcon name="video" /><span>{importingVideo ? "Importing…" : "Video"}</span>
+        </button>
+        <input hidden type="file" ref={videoInput} accept="video/*" aria-label="Video to import"
+          onChange={async (e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ""
+            if (!file) return
+            setImportingVideo(true)
+            try { await onImportVideo(file) }
+            finally { setImportingVideo(false) }
+          }} />
         {CREATE.map(([kind, label, title]) => (
           <button
             key={kind}

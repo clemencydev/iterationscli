@@ -11,6 +11,8 @@ export type Folder = {
   /** Folder it sits in; missing means the top level. */
   parent?: string
   color?: string
+  /** Video whose imported clips live here. */
+  videoId?: string
   /** The ticket this folder belongs to. A ticket has at most one. */
   taskId?: string
 }
@@ -27,6 +29,7 @@ export type FileEntry = {
   /** Pixel size of an image or video, when known. */
   width?: number
   height?: number
+  duration?: number
   /** Tickets this file is tied to, besides the one its folder belongs to. */
   taskIds?: string[]
   /** The file this is an annotated copy of. */
@@ -142,7 +145,7 @@ const siblingNamed = (
 export function addFolder(
   w: Workspace,
   name: string,
-  options: Pick<Folder, "parent" | "color" | "taskId"> = {}
+  options: Pick<Folder, "parent" | "color" | "taskId" | "videoId"> = {}
 ): { workspace: Workspace; id: string } {
   const value = name.trim()
   if (!value) throw new Error("A folder needs a name.")
@@ -153,6 +156,7 @@ export function addFolder(
   if (siblingNamed(w, value, options.parent))
     throw new Error("A folder with that name already exists there.")
   const folder: Folder = { id: newId(), name: value }
+  if (options.videoId) folder.videoId = options.videoId
   if (options.parent) folder.parent = options.parent
   if (options.color) folder.color = options.color.toLowerCase()
   if (options.taskId) folder.taskId = options.taskId
@@ -160,6 +164,24 @@ export function addFolder(
     id: folder.id,
     workspace: { ...w, folders: [...(w.folders ?? []), folder] },
   }
+}
+
+/** Find the original video's clip folder, including when editing a saved copy. */
+export function videoFolder(w: Workspace, video: FileEntry) {
+  const owner = video.copyOf ?? video.id
+  return (w.folders ?? []).find((folder) => folder.videoId === owner)
+}
+
+export function ensureVideoFolder(w: Workspace, id: string) {
+  const file = (w.files ?? []).find((entry) => entry.id === id)
+  if (!file || fileKind(file.mime, file.name) !== "video")
+    throw new Error("Video not found.")
+  const existing = videoFolder(w, file)
+  if (existing) return { workspace: w, id: existing.id }
+  const base = `${file.name} clips`
+  let name = base
+  for (let n = 2; siblingNamed(w, name, file.folder); n++) name = `${base} (${n})`
+  return addFolder(w, name, { parent: file.folder, videoId: file.copyOf ?? file.id })
 }
 
 /** Renames, recolors, moves or reassigns a folder. `undefined` clears a field. */
@@ -473,6 +495,7 @@ export function saveAnnotatedCopy(
     folder: original.folder,
     width: original.width,
     height: original.height,
+    duration: original.duration,
     copyOf: original.id,
     annotation,
     ...(tie && places.tasks.length ? { taskIds: [...places.tasks] } : {}),
@@ -657,7 +680,7 @@ export function addProject(
 
 /** Blob keys still in use by a workspace's files. */
 export const usedBlobs = (w: Pick<Workspace, "files">) =>
-  new Set((w.files ?? []).map((file) => file.blob))
+  new Set((w.files ?? []).flatMap((file) => [file.blob, ...(file.annotation?.sources ?? []).map((s) => s.blob)]))
 
 /** Drops references to a deleted ticket from folders and files. */
 export function dropTaskRefs(w: Workspace, taskId: string): Workspace {

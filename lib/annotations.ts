@@ -47,7 +47,13 @@ export type VideoEdit =
   /** A section to remove. */
   | { id: string; kind: "cut"; start: number; end: number }
 
+export type VideoSource = { name: string; blob: string; duration: number }
+
 export type Annotation = {
+  /** Additional media, appended in stable source-time coordinates. */
+  sources?: VideoSource[]
+  /** Source ranges in edited playback order. */
+  clipOrder?: Segment[]
   shapes?: Shape[]
   pins?: Pin[]
   marks?: Mark[]
@@ -77,6 +83,7 @@ export const annotationCount = (a: Annotation | undefined) =>
   (a?.shapes?.length ?? 0) +
   (a?.pins?.length ?? 0) +
   (a?.marks?.length ?? 0) +
+  (a?.sources?.length ?? 0) +
   (a?.edits?.length ?? 0) +
   (a?.notes?.length ?? 0)
 
@@ -89,6 +96,7 @@ export function describeAnnotation(a: Annotation | undefined) {
   return [
     count(a?.shapes?.length ?? 0, "drawing"),
     count(a?.edits?.length ?? 0, "edit"),
+    count(a?.sources?.length ?? 0, "imported clip"),
     count(comments, "comment"),
   ]
     .filter(Boolean)
@@ -173,7 +181,9 @@ export function cutRanges(edits: VideoEdit[], duration: number): Segment[] {
  * What is left of the clip, in order: everything outside the cuts, broken
  * again at each split. These are the clips an editor's timeline would hold.
  */
-export function keptSegments(edits: VideoEdit[], duration: number): Segment[] {
+export function keptSegments(
+  edits: VideoEdit[], duration: number, order: Segment[] = [], boundaries: number[] = []
+): Segment[] {
   const kept: Segment[] = []
   let from = 0
   for (const cut of cutRanges(edits, duration)) {
@@ -181,10 +191,11 @@ export function keptSegments(edits: VideoEdit[], duration: number): Segment[] {
     from = cut.end
   }
   if (duration > from) kept.push({ start: from, end: duration })
-  const splits = tidyEdits(edits, duration).flatMap((edit) =>
-    edit.kind === "split" ? [edit.at] : []
-  )
-  return kept.flatMap((segment) => {
+  const splits = [...new Set([
+    ...boundaries,
+    ...tidyEdits(edits, duration).flatMap((edit) => edit.kind === "split" ? [edit.at] : []),
+  ])].sort((a, b) => a - b)
+  const segments = kept.flatMap((segment) => {
     const points = [
       segment.start,
       ...splits.filter((at) => at > segment.start && at < segment.end),
@@ -192,17 +203,47 @@ export function keptSegments(edits: VideoEdit[], duration: number): Segment[] {
     ]
     return points.slice(1).map((end, i) => ({ start: points[i], end }))
   })
+  if (!order.length) return segments
+  // Subsequent splits and trims inherit the position of their parent clip.
+  const rank = (s: Segment) => {
+    const index = order.findIndex((old) => old.start < s.end && s.start < old.end)
+    return index < 0 ? order.length : index
+  }
+  return segments.sort((a, b) => rank(a) - rank(b))
+}
+
+export function videoSources(primary: VideoSource, extras: VideoSource[] = []) {
+  let start = 0
+  return [primary, ...extras].map((source) => {
+    const end = start + source.duration
+    const span = { ...source, start, end }
+    start = end
+    return span
+  })
+}
+
+export function moveSegment(segments: Segment[], from: number, to: number) {
+  const next = [...segments]
+  if (from >= 0 && from < next.length && to >= 0 && to < next.length)
+    next.splice(to, 0, ...next.splice(from, 1))
+  return next
+}
+
+export function textVisibleAt(text: Segment, time: number) {
+  return time >= text.start && time < text.end
 }
 
 /** Where a moment of the source lands once the cuts are made; null if cut. */
 export function toRecord(at: number, segments: Segment[]): number | null {
   let elapsed = 0
+  let boundary: number | null = null
   for (const segment of segments) {
-    if (at >= segment.start && at <= segment.end)
+    if (at >= segment.start && at < segment.end)
       return elapsed + (at - segment.start)
     elapsed += segment.end - segment.start
+    if (at === segment.end) boundary = elapsed
   }
-  return null
+  return boundary
 }
 
 /** The part or parts of a source range that survive the cuts, in edited time. */
@@ -234,6 +275,17 @@ export type EditExport = {
   edits: VideoEdit[]
   marks?: Mark[]
   fps?: number
+  /** Duration is the primary source length. */
+  sources?: VideoSource[]
+  clipOrder?: Segment[]
+}
+
+function exportTimeline(data: EditExport) {
+  const sources = videoSources({ name: data.name, duration: data.duration, blob: "" }, data.sources)
+  const duration = sources[sources.length - 1].end
+  const segments = keptSegments(data.edits, duration, data.clipOrder, sources.slice(1).map((s) => s.start))
+  const sourceAt = (at: number) => sources.find((s) => at < s.end) ?? sources[sources.length - 1]
+  return { sources, duration, segments, sourceAt }
 }
 
 const cell = (value: string | number) => {
@@ -247,9 +299,10 @@ const seconds = (value: number) => (Math.round(value * 1000) / 1000).toString()
  * each lands on the edited timeline), then the cuts, splits, on-screen text
  * and comments. Timecodes are HH:MM:SS:FF at `fps`.
  */
-export function editsCsv({ name, duration, edits, marks = [], fps = 30 }: EditExport) {
+export function editsCsv(data: EditExport) {
+  const { edits, marks = [], fps = 30 } = data
+  const { duration, segments, sourceAt, sources } = exportTimeline(data)
   const tidy = tidyEdits(edits, duration)
-  const segments = keptSegments(edits, duration)
   const tc = (at: number) => timecode(at, fps)
   const rows: (string | number)[][] = [
     [
@@ -274,21 +327,24 @@ export function editsCsv({ name, duration, edits, marks = [], fps = 30 }: EditEx
     text = "",
     x: number | "" = "",
     y: number | "" = ""
-  ) =>
+  ) => {
+    const source = sourceAt(range.start)
+    const local = { start: range.start - source.start, end: range.end - source.start }
     rows.push([
       type,
-      tc(range.start),
-      tc(range.end),
+      tc(local.start),
+      tc(local.end),
       record ? tc(record.start) : "",
       record ? tc(record.end) : "",
-      seconds(range.start),
-      seconds(range.end),
+      seconds(local.start),
+      seconds(local.end),
       text,
       x,
       y,
-      name,
+      source.name,
       fps,
     ])
+  }
   let elapsed = 0
   for (const segment of segments) {
     const length = segment.end - segment.start
@@ -296,7 +352,13 @@ export function editsCsv({ name, duration, edits, marks = [], fps = 30 }: EditEx
     elapsed += length
   }
   for (const edit of tidy) {
-    if (edit.kind === "cut") row("cut", edit, null)
+    if (edit.kind === "cut") {
+      for (const source of sources) {
+        const start = Math.max(edit.start, source.start)
+        const end = Math.min(edit.end, source.end)
+        if (start < end) row("cut", { start, end }, null)
+      }
+    }
     if (edit.kind === "split") {
       const at = toRecord(edit.at, segments)
       row(
@@ -306,15 +368,24 @@ export function editsCsv({ name, duration, edits, marks = [], fps = 30 }: EditEx
       )
     }
     if (edit.kind === "text") {
-      const [first] = recordRanges(edit, segments)
-      row(
-        "text",
-        edit,
-        first ?? null,
-        edit.text,
-        Math.round(edit.x * 100),
-        Math.round(edit.y * 100)
-      )
+      let recordStart = 0
+      let visible = false
+      for (const segment of segments) {
+        const start = Math.max(edit.start, segment.start)
+        const end = Math.min(edit.end, segment.end)
+        if (end > start) {
+          visible = true
+          const at = recordStart + start - segment.start
+          row("text", { start, end }, { start: at, end: at + end - start },
+            edit.text, Math.round(edit.x * 100), Math.round(edit.y * 100))
+        }
+        recordStart += segment.end - segment.start
+      }
+      if (!visible) for (const source of sources) {
+        const start = Math.max(edit.start, source.start)
+        const end = Math.min(edit.end, source.end)
+        if (end > start) row("text", { start, end }, null, edit.text, Math.round(edit.x * 100), Math.round(edit.y * 100))
+      }
     }
   }
   for (const mark of [...marks].sort((a, b) => a.at - b.at)) {
@@ -334,7 +405,9 @@ export function editsCsv({ name, duration, edits, marks = [], fps = 30 }: EditEx
  * Resolve, Avid and most editors import as a timeline. The record side starts
  * at 01:00:00:00 and the source is assumed to start at 00:00:00:00.
  */
-export function editsEdl({ name, duration, edits, fps = 30 }: EditExport) {
+export function editsEdl(data: EditExport) {
+  const { name, fps = 30 } = data
+  const { segments, sourceAt } = exportTimeline(data)
   const title = name.replace(/\.[^.]+$/, "").replace(/[^\w -]/g, " ").trim()
   const lines = [
     `TITLE: ${title || "Untitled"}`,
@@ -342,7 +415,8 @@ export function editsEdl({ name, duration, edits, fps = 30 }: EditExport) {
     "",
   ]
   let elapsed = 0
-  keptSegments(edits, duration).forEach((segment, i) => {
+  segments.forEach((segment, i) => {
+    const source = sourceAt(segment.start)
     const length = segment.end - segment.start
     lines.push(
       [
@@ -350,12 +424,12 @@ export function editsEdl({ name, duration, edits, fps = 30 }: EditExport) {
         " AX      ",
         " V    ",
         " C       ",
-        ` ${timecode(segment.start, fps)}`,
-        ` ${timecode(segment.end, fps)}`,
+        ` ${timecode(segment.start - source.start, fps)}`,
+        ` ${timecode(segment.end - source.start, fps)}`,
         ` ${timecode(elapsed, fps, 1)}`,
         ` ${timecode(elapsed + length, fps, 1)}`,
       ].join(""),
-      `* FROM CLIP NAME: ${name}`,
+      `* FROM CLIP NAME: ${source.name}`,
       ""
     )
     elapsed += length
@@ -367,8 +441,9 @@ export function editsEdl({ name, duration, edits, fps = 30 }: EditExport) {
  * The on-screen text as SubRip subtitles, timed against the edited clip (after
  * the cuts), so it lines up with a timeline made from the EDL.
  */
-export function editsSrt({ duration, edits }: EditExport) {
-  const segments = keptSegments(edits, duration)
+export function editsSrt(data: EditExport) {
+  const { edits } = data
+  const { segments, duration } = exportTimeline(data)
   const captions = tidyEdits(edits, duration)
     .flatMap((edit) =>
       edit.kind === "text" && edit.text.trim()

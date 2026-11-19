@@ -107,6 +107,8 @@ import {
 import {
   addFile,
   ensureTicketFolder,
+  ensureVideoFolder,
+  fileKind,
   fileProject,
   folderName,
   folderPath,
@@ -124,6 +126,7 @@ import Annotator from "./Annotator"
 import LatexEditor, { type LatexOpen } from "./LatexEditor"
 import { createLatexProject } from "@/lib/latex-project"
 import { TEMPLATES } from "@/lib/latex"
+import FloatingFiles from "./FloatingFiles"
 import FileExplorer, { type Place } from "./FileExplorer"
 import { FileThumb } from "./Shapes"
 import {
@@ -198,6 +201,7 @@ export default function Workspace() {
   const [annotating, setAnnotating] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, Annotation>>({})
   /** The folder the file explorer is showing. */
+  const [explorerOpen, setExplorerOpen] = useState(false)
   const [filePlace, setFilePlace] = useState<Place>({ type: "all" })
   const [renamingNode, setRenamingNode] = useState<string | null>(null)
   /** The LaTeX document open in the editor, and the file of it being shown. */
@@ -671,18 +675,22 @@ export default function Workspace() {
    */
   async function importFiles(
     picked: File[],
-    where: { folder?: string; taskId?: string } = {}
+    where: { folder?: string; taskId?: string; videoId?: string } = {}
   ) {
     const stored: {
       file: File
       blob: string
-      size: { width: number; height: number } | null
+      size: Awaited<ReturnType<typeof mediaSize>>
     }[] = []
     let failed = ""
     for (const file of picked) {
       try {
+        const kind = fileKind(file.type, file.name)
+        const size = await mediaSize(file, kind)
+        if (where.videoId && (kind !== "video" || !size?.duration))
+          throw new Error(`Could not read "${file.name}" as a video clip.`)
         const blob = await putBlob(file)
-        stored.push({ file, blob, size: await mediaSize(file) })
+        stored.push({ file, blob, size })
       } catch (error) {
         failed = error instanceof Error ? error.message : "Import failed."
         break
@@ -694,10 +702,15 @@ export default function Workspace() {
     }
     keepStorage()
     const ids: string[] = []
-    change(
+    const imported = change(
       (current) => {
         let next = current
         let folder = where.folder
+        if (where.videoId) {
+          const made = ensureVideoFolder(next, where.videoId)
+          next = made.workspace
+          folder = made.id
+        }
         if (!folder && where.taskId) {
           const made = ensureTicketFolder(next, where.taskId)
           next = made.workspace
@@ -715,6 +728,9 @@ export default function Workspace() {
             ...(item.size ?? {}),
           })
           next = added.workspace
+          if (fileKind(item.file.type, item.file.name) === "video" &&
+              !next.folders?.some((f) => f.id === folder && f.videoId))
+            next = ensureVideoFolder(next, added.id).workspace
           ids.push(added.id)
         }
         return next
@@ -723,7 +739,7 @@ export default function Workspace() {
         ? `Imported ${stored.length} of ${picked.length}. ${failed}`
         : `Imported ${stored.length} file${stored.length === 1 ? "" : "s"}.`
     )
-    return ids
+    return imported ? ids : []
   }
   /** Puts a file on the canvas, sized to the picture when it is one. */
   const placeOnCanvas = (fileId: string) =>
@@ -988,6 +1004,7 @@ export default function Workspace() {
       const result = execute(w, input, boardCenter(), { scheme })
       if (result.workspace !== w) commit(result.workspace)
       if (result.scheme) chooseScheme(result.scheme)
+      if (result.explorer) setExplorerOpen(true)
       if (result.file) annotate(result.file)
       if (result.latex && "open" in result.latex) openLatex(result.latex.open)
       if (result.latex && "create" in result.latex) {
@@ -1177,6 +1194,7 @@ export default function Workspace() {
               }
               {...(inPopup ? {} : dragProps(tab))}
               onClick={() => {
+                if (inPopup && tab === "files") return setExplorerOpen(true)
                 open(tab)
                 if (inPopup) setTerminalOpen(false)
               }}
@@ -1232,6 +1250,7 @@ export default function Workspace() {
         inputRef={popup ? popupPrompt : mainPrompt}
         inputId={popup ? "workspace-popup-command" : "alpha-command"}
         // A terminal window already has a title bar of its own.
+        onFiles={() => setExplorerOpen(true)}
         chrome={!popup}
         autoFocus={!popup}
       />
@@ -2111,6 +2130,14 @@ export default function Workspace() {
         columns={w.columns}
         files={w.files ?? []}
         onOpenFile={annotate}
+        onImportVideo={async (file) => {
+          if (fileKind(file.type, file.name) !== "video") {
+            setNotice("Choose a video file.")
+            return
+          }
+          const [id] = await importFiles([file])
+          if (id) placeOnCanvas(id)
+        }}
         onObjectChange={(id, patch) =>
           change((w) => ({
             ...w,
@@ -2190,7 +2217,14 @@ export default function Workspace() {
       />
     )
   }
-  function files() {
+  function files(floating = false) {
+    function navigate(action: () => void) {
+      if (floating) {
+        setExplorerOpen(false)
+        setTerminalOpen(false)
+      }
+      action()
+    }
     return (
       <FileExplorer
         w={w}
@@ -2198,13 +2232,20 @@ export default function Workspace() {
         place={filePlace}
         onPlace={setFilePlace}
         onImport={importFiles}
-        onAnnotate={annotate}
-        onOpenTask={(id) => setSplitTask(id)}
+        onAnnotate={(id) => navigate(() => annotate(id))}
+        onOpenTask={(id) => navigate(() => setSplitTask(id))}
         onCanvas={placeOnCanvas}
         notify={setNotice}
       />
     )
   }
+  const floatingFiles = () => explorerOpen && (
+    <FloatingFiles onClose={() => {
+      setExplorerOpen(false)
+      const prompt = terminalOpen ? popupPrompt : mainPrompt
+      prompt.current?.focus()
+    }}>{files(true)}</FloatingFiles>
+  )
   function annotator() {
     return (
       <Annotator
@@ -2887,6 +2928,7 @@ export default function Workspace() {
             &gt;_ {SHELL_TITLES[shell]} · workspace terminal
           </h2>
           <div className={styles.terminalWindowControls}>
+            <button onClick={() => setExplorerOpen(true)}>Files</button>
             <button
               title="Cycle terminal mode (M outside text fields)"
               onClick={cycleTerminalMode}
@@ -3189,8 +3231,9 @@ export default function Workspace() {
           if (e.target === e.currentTarget) setTerminalOpen(false)
         }}
       >
-        {terminalOpen && terminalMode === "modal" && terminalWindow()}
+        {terminalOpen && terminalMode === "modal" && <>{terminalWindow()}{floatingFiles()}</>}
       </dialog>
+      {ready && !(terminalOpen && terminalMode === "modal") && floatingFiles()}
       {ready && terminalOpen && terminalMode === "floating" && (
         <div
           ref={floatingTerminal}

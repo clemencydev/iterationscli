@@ -558,3 +558,62 @@
   min-width: 0;
   padding: 3px 8px;
 }
+
+.sequence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+}
+.sequence > div {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  padding: 2px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: grab;
+}
+.sequence > div[data-dragging] { opacity: .55; }
+.annotator .sequence button { padding: 3px 6px; font-size: 11px; }
+.sequence > div button:first-child {
+  cursor: grab;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mediaError {
+  position: absolute;
+  z-index: 1;
+  padding: 6px;
+  color: var(--foreground);
+  background: var(--surface);
+}
+.canvasPlayer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+.canvasPlayer .stage {
+  padding: 0;
+  background: #000;
+}
+.canvasPlayer .caption { pointer-events: none; }
+.canvasTransport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  background: var(--surface);
+}
+.canvasTransport input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--alpha-accent);
+}
+.canvasTransport small { white-space: nowrap; }
+.canvasStatus { align-self: center; margin: auto; padding: 8px; }

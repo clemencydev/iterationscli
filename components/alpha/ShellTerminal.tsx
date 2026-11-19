@@ -63,6 +63,7 @@ export default function ShellTerminal({
   chrome = true,
   autoFocus = false,
   onClose,
+  onFiles,
   onArrow,
   disabled = false,
   promptHidden = false,
@@ -95,6 +96,7 @@ export default function ShellTerminal({
   autoFocus?: boolean
   /** Adds a close button to the title bar. */
   onClose?: () => void
+  onFiles?: () => void
   /**
    * Gets ↑ (-1) and ↓ (+1) before history does; return true to keep the key,
    * e.g. to move through a list shown above the prompt.
@@ -326,6 +328,7 @@ export default function ShellTerminal({
             {title}
           </span>
           <span className={styles.status}>{status}</span>
+          {onFiles && <button type="button" onClick={onFiles}>Files</button>}
           {onClose && (
             <button
               type="button"

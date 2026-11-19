@@ -16,6 +16,7 @@ import {
   annotatedName,
   deleteFolder,
   ensureTicketFolder,
+  ensureVideoFolder,
   fileKind,
   fileProject,
   fileTasks,
@@ -271,4 +272,22 @@ test("tex commands list templates, ask for a document and open one", () => {
   assert.throws(() => execute(w, "tex open fig.png"), /not a text file LaTeX reads/)
   assert.equal(execute(w, "cd latex").go, "latex")
   assert.equal(resolveView("tex"), "latex")
+})
+
+test("the terminal opens the explorer and a saved video shares its original clip folder", () => {
+  const { w } = sample()
+  assert.equal(execute(w, "explorer").explorer, true)
+  assert.equal(execute(w, "files").explorer, true)
+  assert.equal(execute(w, "files teaser").explorer, undefined)
+  const video = w.files.find((f) => f.name === "teaser.mp4")
+  const existing = addFolder(w, "teaser.mp4 clips", { parent: video.folder })
+  const holder = ensureVideoFolder(existing.workspace, video.id)
+  const folder = holder.workspace.folders.find((f) => f.id === holder.id)
+  assert.equal(folder.parent, video.folder)
+  assert.equal(folder.name, "teaser.mp4 clips (2)")
+  const copy = saveAnnotatedCopy(holder.workspace, video.id, {
+    sources: [{ name: "intro.mp4", duration: 5, blob: "intro" }],
+  })
+  assert.equal(ensureVideoFolder(copy.workspace, copy.id).id, holder.id)
+  assert.ok(usedBlobs(copy.workspace).has("intro"))
 })

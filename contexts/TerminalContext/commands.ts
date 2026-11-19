@@ -143,7 +143,8 @@ export const WorkspaceCommands: Record<string, Command> = {
     local("delete", "Delete a node", [node]),
   ]),
   progress: local("progress", "Every column's completion with each ticket's share"),
-  files: local("files", "List files; a filter searches every folder", [text("filter")]),
+  explorer: local("explorer", "Open the floating file explorer"),
+  files: local("files", "Open Files, or search every folder with a filter", [text("filter")]),
   folder: group("folder", "Folders in the file explorer", [
     local("list", "List folders"),
     local("new", "Create a folder", [text("name"), hex(false), folder]),
