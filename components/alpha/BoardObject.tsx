@@ -200,6 +200,7 @@ export default function BoardObject({
     }
     return (
       <g
+        data-board-item={item.id}
         className={styles.arrowObject}
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -457,6 +458,7 @@ export default function BoardObject({
   )
   return (
     <foreignObject
+      data-board-item={item.id}
       x={item.x}
       y={item.y}
       width={item.width}

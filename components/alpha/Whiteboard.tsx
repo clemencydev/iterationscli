@@ -445,17 +445,27 @@ export default function Whiteboard({
         }}
         aria-label="Drawing surface. Use the pen to draw or the hand to pan."
         onContextMenu={(e) => e.preventDefault()}
+        onAuxClick={(e) => { if (e.button === 1) e.preventDefault() }}
         onPointerDownCapture={(e) => {
           if (gesture.current || (e.button !== 0 && e.button !== 1)) return
           const target = e.target as Element
-          const moving = !!target.closest("[data-selection-move]")
+          const middleItem = e.button === 1 && target.closest("[data-board-item]")?.getAttribute("data-board-item")
+          const middleStroke = e.button === 1 && target.closest("[data-board-stroke]")?.getAttribute("data-board-stroke")
+          const moving = middleItem || middleStroke || !!target.closest("[data-selection-move]")
+          if (middleItem || middleStroke) {
+            setTool("select")
+            if (middleItem && !chosen.objects.includes(middleItem))
+              setChosen({ objects: [middleItem], strokes: [] })
+            if (middleStroke && !chosen.strokes.includes(middleStroke))
+              setChosen({ strokes: [middleStroke], objects: [] })
+          }
           if (e.button !== 1 && !moving && target.closest("foreignObject"))
             return
           e.preventDefault()
           e.stopPropagation()
           e.currentTarget.focus()
           e.currentTarget.setPointerCapture(e.pointerId)
-          const kind = e.button === 1 ? "hand" : moving ? "move" : tool
+          const kind = moving ? "move" : e.button === 1 ? "hand" : tool
           const p = point(e)
           gesture.current = {
             pointer: e.pointerId,
@@ -574,6 +584,7 @@ export default function Whiteboard({
             .map((s) => (
               <polyline
                 key={s.id}
+                data-board-stroke={s.id}
                 points={s.points.map((p) => p.join(",")).join(" ")}
                 fill="none"
                 stroke={s.color}
@@ -689,7 +700,7 @@ export default function Whiteboard({
           "select",
           "select",
           "Select",
-          "Drag to select items; drag the selection to move"
+          "Drag to select. Middle-drag an item to move it or empty space to pan."
         )}
         {toolButton("pen", "pen", "Pen", "Draw with the pen")}
         {toolButton(

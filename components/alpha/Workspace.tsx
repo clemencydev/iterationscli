@@ -2128,7 +2128,9 @@ export default function Workspace() {
         objects={w.objects ?? []}
         tasks={w.tasks}
         columns={w.columns}
-        files={w.files ?? []}
+        files={(w.files ?? []).map((file) =>
+          drafts[file.id] ? { ...file, annotation: drafts[file.id] } : file
+        )}
         onOpenFile={annotate}
         onImportVideo={async (file) => {
           if (fileKind(file.type, file.name) !== "video") {
